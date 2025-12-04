@@ -15,14 +15,14 @@ salome.salome_init()
 geom = geomBuilder.New()
 
 # Development input paramaters
-envelope_shape = "Wang"    # Shape of envelope
+envelope_shape = "Wang"     # Shape of envelope
 envelope_length = 100       # Axial length of envelope
 envelope_resolution = 100   # Number of points taken axially
 
 lobe_number = 3             # Number of lobes of envelope (< 3)
 lobe_offset_y = 13.333      # Distance between each lobe
 lobe_offset_x = 13.333      # Central lobe offset (for 3 lobe design)
-lobe_offset_z = 5           # Central lobe offset (for 3 lobe design)
+lobe_offset_z = 6           # Central lobe offset (for 3 lobe design)
 central_lobe_length = 80    # Length of central lobe (for 3 lobe design)
 
 fin_axial_offset = 80       # Distance between the leading edge of root chord of the fin and the nose. (< length - rc)
@@ -46,20 +46,19 @@ def create_envelope (length):
     gertler = plotter.GertlerEnvelope(plotter.STANDARD_ENVELOPES[envelope_shape], envelope_resolution, length)
     envelope_vertices = [geom.MakeVertex(x, y, 0) for x, y in gertler.points()]
     envelope_surface = geom.MakeRevolution(geom.MakePolyline(envelope_vertices), x_axis, 2 * np.pi)
-    envelope_surface = geom.MakeGlueFaces(envelope_surface, 1e-7)
-    envelope_surface = geom.RemoveInternalFaces(envelope_surface)
     
-    return gertler, geom.MakeSolid(geom.MakeShell([envelope_surface]))
+    return gertler, envelope_surface
 
 gertler1, envelope = create_envelope(envelope_length)
 envelopes = [envelope] if lobe_number == 1 else [translate_object(envelope, 0, -1/2, 0), translate_object(envelope, 0, 1/2, 0)]
 
 if lobe_number == 3:
-    # TODO: There is weird issue that appears when we try to vary the central lobe shape different to that
-    # of the main envelope shape where when fusion of shapes happen but the central lobe does not appear?
-    # I was not able to find the cause of error yet but has to be figured out in future to make this bugproof.
     central_lobe = envelope if central_lobe_length == envelope_length else create_envelope(central_lobe_length)[1]
     envelopes.append(translate_object(central_lobe, 1, 0, 1))
+
+# NOTE: This is prone to a problem in rendering where the central lobe does not
+# undergo a proper boolean operation.
+lobes = geom.MakeFuseList([geom.MakeSolid([geom.MakeShell(f)]) for f in envelopes])
 
 # Modelling of Fins
 
@@ -108,7 +107,7 @@ else:
         fins.append(translate_object(geom.MakeRotation(fin, x_axis, np.radians(fin_theta_pos[i])), 0, -1/2, 0))
         fins.append(translate_object(geom.MakeRotation(fin, x_axis, np.radians(-fin_theta_pos[i])), 0, 1/2, 0))
 
-airship = geom.MakeFuseList(envelopes + fins)
+airship = geom.MakeFuseList([lobes] + fins)
 airship_id = geom.addToStudy(airship, "Airship")
 
 gg = salome.ImportComponentGUI("GEOM")
