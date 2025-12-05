@@ -44,10 +44,11 @@ def translate_object (object, x_offset, y_offset, z_offset):
 
 def create_envelope (length):
     gertler = plotter.GertlerEnvelope(plotter.STANDARD_ENVELOPES[envelope_shape], envelope_resolution, length)
-    envelope_vertices = [geom.MakeVertex(x, y, 0) for x, y in gertler.points()]
-    envelope_surface = geom.MakeRevolution(geom.MakePolyline(envelope_vertices), x_axis, 2 * np.pi)
+    envelope_vertices = [geom.MakeVertex(x, y, 0) for x, y in gertler.points()] + [geom.MakeVertex(0, 0, 0)]
+    envelope_face = geom.MakeFace(geom.MakePolyline(envelope_vertices), 1)
+    envelope = geom.MakeRevolution(envelope_face, x_axis, 2 * np.pi)
     
-    return gertler, envelope_surface
+    return gertler, envelope
 
 gertler1, envelope = create_envelope(envelope_length)
 envelopes = [envelope] if lobe_number == 1 else [translate_object(envelope, 0, -1/2, 0), translate_object(envelope, 0, 1/2, 0)]
@@ -56,9 +57,12 @@ if lobe_number == 3:
     central_lobe = envelope if central_lobe_length == envelope_length else create_envelope(central_lobe_length)[1]
     envelopes.append(translate_object(central_lobe, 1, 0, 1))
 
+# print([geom.CheckSelfIntersections(e) for e in envelopes])
+
 # NOTE: This is prone to a problem in rendering where the central lobe does not
 # undergo a proper boolean operation.
-lobes = geom.MakeFuseList([geom.MakeSolid([geom.MakeShell(f)]) for f in envelopes])
+# lobes = geom.MakeFuseList([geom.MakeSolid([geom.MakeShell(f)]) for f in envelopes])
+lobes = geom.MakeFuseList(envelopes)
 
 # Modelling of Fins
 
@@ -113,6 +117,8 @@ airship_id = geom.addToStudy(airship, "Airship")
 gg = salome.ImportComponentGUI("GEOM")
 gg.createAndDisplayGO(airship_id)
 gg.setDisplayMode(airship_id, 1)
+
+geom.ExportBREP(airship, 'D:\\Airships\\Salome\\test2.brep')
 
 if salome.sg.hasDesktop():
     salome.sg.updateObjBrowser()
