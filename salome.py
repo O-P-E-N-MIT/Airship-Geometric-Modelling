@@ -62,8 +62,10 @@ if lobe_number == 3:
 
 fin_axial_offset = min(fin_axial_offset, envelope_length - fin_rc_length)
 fin_radial_offset = main_gertler.at(fin_axial_offset)
+
 rc_axial_offset = fin_axial_offset
 tc_axial_offset = fin_rc_length/2 * (1 - fin_taper_ratio) + fin_height * np.tan(np.radians(fin_sweep_angle))
+
 rc_vertices = []
 tc_vertices = []
 
@@ -108,11 +110,11 @@ else:
 airship = geom.MakeFuseList(envelopes + fins)
 airship_id = geom.addToStudy(airship, "Airship")
 
-gg = salome.ImportComponentGUI("GEOM")
-gg.createAndDisplayGO(airship_id)
-gg.setDisplayMode(airship_id, 1)
-
 # geom.ExportBREP(airship, 'D:\\Airships\\Salome\\test2.brep')
 
 if salome.sg.hasDesktop():
+    gg = salome.ImportComponentGUI("GEOM")
+    gg.createAndDisplayGO(airship_id)
+    gg.setDisplayMode(airship_id, 1)
+
     salome.sg.updateObjBrowser()
