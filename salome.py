@@ -129,13 +129,8 @@ sin_tip_angle = np.sin(np.radians(fin_tip_angle))
 
 for x, y in plotter.naca_airfoil_points(fin_thickness, fin_section_resolution, fin_rc_length):
     rc_vertices.append(geompy.MakeVertex(rc_axial_offset + x, y, rc_radial_offset))
-    
     # For tip chord, the points are linearly scaled by the taper ratio.
-    tc_vertices.append(geompy.MakeVertex(
-        tc_axial_offset + x * fin_taper_ratio * cos_tip_angle, 
-        y * fin_taper_ratio, 
-        tc_radial_offset - x * fin_taper_ratio * sin_tip_angle
-    ))
+    tc_vertices.append(geompy.MakeVertex(tc_axial_offset + x * fin_taper_ratio * cos_tip_angle, y * fin_taper_ratio, tc_radial_offset - x * fin_taper_ratio * sin_tip_angle))
 
 rc_wire = geompy.MakePolyline(rc_vertices, True)
 tc_wire = geompy.MakePolyline(tc_vertices, True)
