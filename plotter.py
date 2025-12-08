@@ -48,6 +48,9 @@ class GertlerEnvelope:
             y = self.diameter * (self.coeffs[0]*x + self.coeffs[1]*x**2 + self.coeffs[2]*x**3 + self.coeffs[3]*x**4 + self.coeffs[4]*x**5 + self.coeffs[5]*x**6)**0.5
             yield (self.length * x, y)
 
+        # NOTE: This point is yielded separately to avoid floating point inaccuracies but there is a chance
+        # that similar floating point inaccuracies may occur in the previous points as n value increases. Using
+        # a if loop to check for them may increase computation.
         yield (self.length, 0)
 
     # Returns the coordinates of points on the envelope which intercepts the trailing edge of a fin.
@@ -82,8 +85,9 @@ class GertlerEnvelope:
         ], float)
 
         B = np.array([2*r0, 0, 1/4, 0, -2*r1, 1/4*cp], float).T
+        X = np.linalg.solve(A, B)
         
-        return np.linalg.solve(A, B)
+        return np.round(X, 4)
     
     # Returns a GertlerEnvelope from standard parameters.
     #

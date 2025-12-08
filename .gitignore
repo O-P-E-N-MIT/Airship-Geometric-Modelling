@@ -6,3 +6,4 @@ test/
 *.step
 *.stl
 *.iges
+test.py

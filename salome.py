@@ -1,3 +1,35 @@
+# All the input paramaters required to generate the airship model.
+# envelope_coeffs = (1.1518, -5.69072152, 27.47050632, -61.83093344, 58.45423403, -19.55488538)
+envelope_length = 100           
+envelope_coeffs = (1.2, -0.8779, -3.1206, 5.9936, -4.9138, 1.7187)
+# envelope_diameter = 25.62853
+envelope_diameter = 25.91344908
+envelope_resolution = 100     
+
+lobe_number = 3  
+lobe_offset_x = 13.333             
+lobe_offset_y = 13.333/2
+lobe_offset_z = 7        
+
+central_lobe_coeffs = (1.1518, -5.69072152, 27.47050632, -61.83093344, 58.45423403, -19.55488538)
+central_lobe_length = 80      
+central_lobe_diameter = 20.5028319
+
+fin_axial_offset = 80         
+fin_thickness = 12            
+fin_rc_length = 8             
+fin_section_resolution = 40   
+fin_taper_ratio = 0.5         
+fin_height = 5                
+fin_sweep_angle = 0           
+fin_tip_angle = 0             
+fin_number = 4                
+fin_theta_pos = [0, 90]    
+
+directory_path = "D:\\Airships\\Salome"
+final_object_name = "Airship"
+
+# Import all the required modules
 import salome
 import GEOM
 from salome.geom import geomBuilder
@@ -5,113 +37,137 @@ import numpy as np
 import sys
 import importlib
 
-sys.path.append('D:\\Airships\\Salome')
+# Salome executes the python script files from its own directory so to import local modules, we have to 
+# add our own path manually.
+sys.path.append(directory_path)
 
-# This is to reload the local modules once they are changed. 
+# This is to reload the local modules once they are changed. For some reason, Salome does not reload the
+# modules automatically.
+# 
+# NOTE: This is only a development thing and is to be removed when used in production.
 import plotter
 importlib.reload(plotter)
 
+# Inititating the Geometry Module of Salome.
 salome.salome_init()
-geom = geomBuilder.New()
+geompy = geomBuilder.New()
 
-# Development input paramaters
-envelope_shape = "LOTTE"        # Shape of envelope
-envelope_length = 100           # Axial length of envelope
-envelope_resolution = 100       # Number of points taken axially
+# ---
+# Elementary objects, directions and functions.
+# ---
 
-lobe_number = 3                 # Number of lobes of envelope (< 3)
-lobe_offset_y = 6               # Distance between each lobe
-lobe_offset_x = 13.333          # Central lobe offset (for 3 lobe design)
-lobe_offset_z = 6               # Central lobe offset (for 3 lobe design)
-central_lobe_length = 80        # Length of central lobe (for 3 lobe design)
-central_lobe_shape = "LOTTE"    # Central lobe shape having a different shape.
+O = geompy.MakeVertex(0, 0, 0)
+OX = geompy.MakeVectorDXDYDZ(1, 0, 0) 
+OY = geompy.MakeVectorDXDYDZ(0, 1, 0)
+OZ = geompy.MakeVectorDXDYDZ(0, 0, 1)
 
-fin_axial_offset = 80           # Distance between the leading edge of root chord of the fin and the nose. (< length - rc)
-fin_thickness = 12              # Thickness-to-chord ratio * 100
-fin_rc_length = 8               # Root chord length
-fin_section_resolution = 40     # Number of points taken axially for the airfoil cross section
-fin_taper_ratio = 0.5           # Ratio of tip chord length to root chord length
-fin_height = 5                  # Perpendicular distance between root chord and the tip chord
-fin_sweep_angle = 0             # Angle of sweep with respect to the normal to the cross section.
-fin_number = 4                  # Number of fins. Should be even if there are more than one lobes.
-fin_theta_pos = [0, 90]         # Angle positions for the fin with respect to vertical axis at top. In case of more than one lobe, this will only represent the theta positions of only one side of half of the fins.
-
-# Modelling of envelope 
-
-x_axis = geom.MakeVectorDXDYDZ(1, 0, 0)
-
+# To translate any object to a position with offsets in multiples of lobe offsets.
 def translate_object (object, x_offset, y_offset, z_offset):
-    return geom.MakeTranslationTwoPoints(object, geom.MakeVertex(0, 0, 0), geom.MakeVertex(x_offset * lobe_offset_x, y_offset * lobe_offset_y, z_offset * lobe_offset_z))
+    return geompy.MakeTranslationTwoPoints(object, O, geompy.MakeVertex(x_offset * lobe_offset_x, y_offset * lobe_offset_y, z_offset * lobe_offset_z))
 
-def create_envelope (shape, length):
-    gertler = plotter.GertlerEnvelope(plotter.STANDARD_ENVELOPES[shape], envelope_resolution, length)
-    envelope_vertices = [geom.MakeVertex(x, y, 0) for x, y in gertler.points()]
-    envelope_face = geom.MakeFace(geom.MakeWire([geom.MakeInterpol(envelope_vertices, False, False), geom.MakeLineTwoPnt(geom.MakeVertex(length, 0, 0), geom.MakeVertex(0, 0, 0))], 1e-7), 1)
-    envelope = geom.MakeRevolution(envelope_face, x_axis, 2 * np.pi)
+# ---
+# Modelling of envelope
+# ---
+
+# A function to create the basic envelope geometry along OX.
+def create_envelope (coeffs, length, diameter):
+    gertler = plotter.GertlerEnvelope(coeffs, length, diameter, envelope_resolution)
+    envelope_vertices = [geompy.MakeVertex(x, y, 0) for x, y in gertler.points()]
+
+    # NOTE: Do not make use of Polyline anywhere else as it results in revolution of solids
+    # which do not undergo boolean operation properly. Make use of interpol and wires instead.
+    # 
+    # Given that airship hulls are hollow with some thickness, the revolution here probably
+    # produces a filled solid (revolving a face). If so, we can later just extract the surface
+    # of the formed solid for structural analysis. This is not an issue for CFD meshing atleast.
+    #
+    # TODO: Do the same for fins too.
+    envelope_wire = geompy.MakeWire([geompy.MakeInterpol(envelope_vertices, False, False), geompy.MakeLineTwoPnt(geompy.MakeVertex(length, 0, 0), O)], 1e-7)
+    envelope_face = geompy.MakeFace(envelope_wire, 1)
+    envelope = geompy.MakeRevolution(envelope_face, OX, 2 * np.pi)
     
     return gertler, envelope
 
-main_gertler, envelope = create_envelope(envelope_shape, envelope_length)
-envelopes = [envelope] if lobe_number == 1 else [translate_object(envelope, 0, -1, 0), translate_object(envelope, 0, 1, 0)]
+# Creating the extreme lobe geometry first.
+extreme_gertler, extreme_lobe = create_envelope(envelope_coeffs, envelope_length, envelope_diameter)
 
+# If it is a single lobe design, there is only one extreme lobe which is the central lobe.
+# If anything else (bi lobe or tri lobe), there are two extreme lobes whose translations are applied here.
+lobes = [extreme_lobe] if lobe_number == 1 else [translate_object(extreme_lobe, 0, -1, 0), translate_object(extreme_lobe, 0, 1, 0)]
+
+# If it is a tri lobe design, we have to model the central lobe as well.
 if lobe_number == 3:
-    central_lobe = envelope if central_lobe_length == envelope_length else create_envelope(central_lobe_shape, central_lobe_length)[1]
-    envelopes.append(translate_object(central_lobe, 1, 0, 1))
+    # In case of no explicit specifications of central lobe coefficients, it means, the central
+    # lobe is similar to the extreme lobes. If not, a new geometry has to be created.
+    central_lobe = extreme_lobe if not central_lobe_coeffs else create_envelope(central_lobe_coeffs, central_lobe_length, central_lobe_diameter)[1]
+    
+    # Apply the necessary translations to the central lobe.
+    lobes.append(translate_object(central_lobe, 1, 0, 1))
 
+# ---
 # Modelling of Fins
+# ---
 
-fin_axial_offset = min(fin_axial_offset, envelope_length - fin_rc_length)
-fin_radial_offset = main_gertler.at(fin_axial_offset)
+# Distance of the leading edge of root chord and tip chord from the axis of the envelope.
+rc_radial_offset = extreme_gertler.at(fin_axial_offset)
+tc_radial_offset = rc_radial_offset + fin_height
 
+# Distance of the leading edge of root chord and tip chord from the nose of the envelope.
 rc_axial_offset = fin_axial_offset
-tc_axial_offset = fin_rc_length/2 * (1 - fin_taper_ratio) + fin_height * np.tan(np.radians(fin_sweep_angle))
+tc_axial_offset = rc_axial_offset + fin_rc_length/2 * (1 - fin_taper_ratio) + fin_height * np.tan(np.radians(fin_sweep_angle))
 
 rc_vertices = []
 tc_vertices = []
 
 for x, y in plotter.naca_airfoil_points(fin_thickness, fin_section_resolution, fin_rc_length):
-    rc_vertices.append(geom.MakeVertex(fin_axial_offset + x, y, fin_radial_offset))
-    tc_vertices.append(geom.MakeVertex(fin_axial_offset + tc_axial_offset + x * fin_taper_ratio, y * fin_taper_ratio, fin_radial_offset + fin_height))
+    rc_vertices.append(geompy.MakeVertex(rc_axial_offset + x, y, rc_radial_offset))
+    # For tip chord, the points are linearly scaled by the taper ratio.
+    tc_vertices.append(geompy.MakeVertex(tc_axial_offset + x * fin_taper_ratio, y * fin_taper_ratio, tc_radial_offset))
 
-rc_wire = geom.MakePolyline(rc_vertices, True)
-tc_wire = geom.MakePolyline(tc_vertices, True)
+rc_wire = geompy.MakePolyline(rc_vertices, True)
+tc_wire = geompy.MakePolyline(tc_vertices, True)
 
-rc_face = geom.MakeFace(rc_wire, True)
-tc_face = geom.MakeFace(tc_wire, True)
+rc_face = geompy.MakeFace(rc_wire, True)
+tc_face = geompy.MakeFace(tc_wire, True)
 
-midchord_direction = [geom.MakeVertex(0, 0, 0), geom.MakeVertex(tc_axial_offset, 0, fin_height)]
-planform_surface = geom.MakePipeWithDifferentSectionsBySteps(
+# Modelling the planform surface of the fin as pipe from root chord to tip chord along the mid chord line.
+midchord_direction = [geompy.MakeVertex(0, 0, 0), geompy.MakeVertex(tc_axial_offset, 0, fin_height)]
+planform_surface = geompy.MakePipeWithDifferentSectionsBySteps(
     [rc_wire, tc_wire],
     midchord_direction, 
-    geom.MakePolyline(midchord_direction, False), 
+    geompy.MakePolyline(midchord_direction, False), 
 )
 
-x2, z2 = main_gertler.get_trailing_edge_intercept(fin_axial_offset, fin_rc_length)
-fin = geom.MakeSolid(geom.MakeShell([planform_surface, rc_face, tc_face]))
-fin = geom.MakeRotationThreePoints(
+# Rotating the fin so that the trailing edge of the root chord intersects with the extreme lobe surface.
+x2, z2 = extreme_gertler.get_trailing_edge_intercept(fin_axial_offset, fin_rc_length)
+fin = geompy.MakeSolid(geompy.MakeShell([planform_surface, rc_face, tc_face]))
+fin = geompy.MakeRotationThreePoints(
     fin, 
-    geom.MakeVertex(fin_axial_offset, 0, fin_radial_offset),
-    geom.MakeVertex(fin_axial_offset + fin_rc_length, 0, fin_radial_offset),
-    geom.MakeVertex(x2, 0, z2)
+    geompy.MakeVertex(fin_axial_offset, 0, rc_radial_offset),
+    geompy.MakeVertex(fin_axial_offset + fin_rc_length, 0, rc_radial_offset),
+    geompy.MakeVertex(x2, 0, z2)
 )
 
 fins = []
 
 if lobe_number == 1:
+    # If customised theta positions are not provided, they are evenly distributed.
     if not fin_theta_pos:
         fin_theta_pos = [i * (360 / fin_number) for i in range(0, fin_number)]
 
-    fins = [geom.MakeRotation(fin, x_axis, -np.pi/2 + np.radians(theta)) for theta in fin_theta_pos]
+    # In case of single lobe, all fins lie on the same lobe.
+    fins = [geompy.MakeRotation(fin, OX, -np.pi/2 + np.radians(theta)) for theta in fin_theta_pos]
 else:
+    # In case of bi lobe or tri lobe designs, fins are mirrored on both sides of the lobes.
     for theta in fin_theta_pos:
-        fins.append(translate_object(geom.MakeRotation(fin, x_axis, np.radians(theta)), 0, -1, 0))
-        fins.append(translate_object(geom.MakeRotation(fin, x_axis, np.radians(-theta)), 0, 1, 0))
+        fins.append(translate_object(geompy.MakeRotation(fin, OX, np.radians(theta)), 0, -1, 0))
+        fins.append(translate_object(geompy.MakeRotation(fin, OX, np.radians(-theta)), 0, 1, 0))
 
-airship = geom.MakeFuseList(envelopes + fins)
-airship_id = geom.addToStudy(airship, "Airship")
+# Fuse all the lobes and fins to create the final airship model.
+airship = geompy.MakeFuseList(lobes + fins)
+airship_id = geompy.addToStudy(airship, final_object_name)
 
-# geom.ExportBREP(airship, 'D:\\Airships\\Salome\\test2.brep')
-
+# If Salome GUI is present, display the final airship model and update the object browser.
 if salome.sg.hasDesktop():
     gg = salome.ImportComponentGUI("GEOM")
     gg.createAndDisplayGO(airship_id)
