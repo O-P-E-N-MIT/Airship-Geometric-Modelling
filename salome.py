@@ -6,7 +6,7 @@ envelope_coeffs = (1.2, -0.8779, -3.1206, 5.9936, -4.9138, 1.7187)
 envelope_diameter = 25.91344908
 envelope_resolution = 100
 
-lobe_number = 3
+lobe_number = 2
 lobe_offset_x = 13.333
 lobe_offset_y = 13.333/2
 lobe_offset_z = 7        
@@ -22,7 +22,7 @@ fin_section_resolution = 40
 fin_taper_ratio = 0.5         
 fin_height = 5                
 fin_sweep_angle = 0           
-fin_tip_angle = 0             
+fin_tip_angle = 10       
 fin_number = 4                
 fin_theta_pos = [0, 90]    
 
@@ -124,10 +124,18 @@ tc_axial_offset = rc_axial_offset + fin_rc_length/2 * (1 - fin_taper_ratio) + fi
 rc_vertices = []
 tc_vertices = []
 
+cos_tip_angle = np.cos(np.radians(fin_tip_angle))
+sin_tip_angle = np.sin(np.radians(fin_tip_angle))
+
 for x, y in plotter.naca_airfoil_points(fin_thickness, fin_section_resolution, fin_rc_length):
     rc_vertices.append(geompy.MakeVertex(rc_axial_offset + x, y, rc_radial_offset))
+    
     # For tip chord, the points are linearly scaled by the taper ratio.
-    tc_vertices.append(geompy.MakeVertex(tc_axial_offset + x * fin_taper_ratio, y * fin_taper_ratio, tc_radial_offset))
+    tc_vertices.append(geompy.MakeVertex(
+        tc_axial_offset + x * fin_taper_ratio * cos_tip_angle, 
+        y * fin_taper_ratio, 
+        tc_radial_offset - x * fin_taper_ratio * sin_tip_angle
+    ))
 
 rc_wire = geompy.MakePolyline(rc_vertices, True)
 tc_wire = geompy.MakePolyline(tc_vertices, True)
