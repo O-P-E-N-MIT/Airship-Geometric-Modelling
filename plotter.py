@@ -5,6 +5,10 @@
 # r1 = Tail radius at the back of the airship
 # cp = Prismatic coefficient
 # l2d = Length to diameter ratio
+#
+# Input Variables for a symmetric NACA 4 digit Airfoil Generation
+#
+# t = Maximum thickness as percentage of chord
 
 import numpy as np
 
@@ -19,18 +23,25 @@ STANDARD_ENVELOPES = {
 
 class GertlerEnvelope:
 
-    def __init__ (self, params, n, l = 1):
-        self.params = params
-        self.coeffs = GertlerEnvelope.get_coefficients(params)
+    # Input variables for Gertler Envelope
+    #
+    # coeffs = Coefficients of the Gertler polynomial
+    # length = Length of the envelope
+    # diameter = Maximum diameter of the envelope
+    # n = Number of points to be generated along the length
+    def __init__ (self, coeffs, length, diameter, n):
+        self.coeffs = coeffs
+        self.length = length
+        self.diameter = diameter
         self.n = n
-        self.length = l
-        self.diameter = l / params[4]
 
+    # Get the radius of the envelope at a particular axial position x
     def at (self, x):
         x = x / self.length
         y = self.diameter * (self.coeffs[0]*x + self.coeffs[1]*x**2 + self.coeffs[2]*x**3 + self.coeffs[3]*x**4 + self.coeffs[4]*x**5 + self.coeffs[5]*x**6)**0.5
         return y
-
+    
+    # Iterator to get the radial points along the length of envelope.
     def points (self):
         for i in range(self.n):
             x = i / self.n
@@ -39,6 +50,7 @@ class GertlerEnvelope:
 
         yield (self.length, 0)
 
+    # Returns the coordinates of points on the envelope which intercepts the trailing edge of a fin.
     def get_trailing_edge_intercept (self, x, rc):
         y = self.at(x)
         chord_length = 0
@@ -51,8 +63,12 @@ class GertlerEnvelope:
             y1 = self.at(x1)
             chord_length = ((x-x1)**2 + (y-y1)**2)**0.5
 
-        return (x1, y1)
+        if chord_length < rc:
+            raise Exception("GertlerEnvelope: Unable to find the trailing edge intercept for the given parameters.")
 
+        return (x1, y1)
+    
+    # Returns the coefficients of the Gertler polynomial from standard parameters.
     def get_coefficients (params):
         (m, r0, r1, cp, _) = params
 
@@ -66,36 +82,44 @@ class GertlerEnvelope:
         ], float)
 
         B = np.array([2*r0, 0, 1/4, 0, -2*r1, 1/4*cp], float).T
-        X = np.linalg.solve(A, B)
+        
+        return np.linalg.solve(A, B)
+    
+    # Returns a GertlerEnvelope from standard parameters.
+    #
+    # params = (m1, r0, r1, cp, l2d)
+    # length = Length of the envelope
+    # n = Number of points to be generated along the length
+    def from_parameters (params, length, n):
+        coeffs = GertlerEnvelope.get_coefficients(params)
+        diameter = length / params[4]
+        return GertlerEnvelope(coeffs, length, diameter, n)
 
-        return X
-
-# Input Variables for Symmetric NACA Airfoil
+# Returns the half thickness of a symmetric NACA 4 digit airfoil.
 #
 # t = Maximum thickness as percentage of chord
-
-def naca_airfoil_camber (t, x):
+def naca_airfoil_half_thickness_at (t, x):
     return 5 * t * (0.2969*x**0.5 - 0.1260*x - 0.3516*x**2 + 0.2843*x**3 - 0.1036*x**4)
 
+# Returns an array of points representing a symmetric NACA airfoil.
+#
 # NOTE: These points are linearly scalable with length.
-# 
-# I did not make this an iterator function like the Gertler Envelope because 
-# the same points can be used to scale for the tapering wing.
 def naca_airfoil_points (t, n, l = 1):
     t *= l/100
-    points = []
 
     for i in range(n):
         x = i / n
-        y = naca_airfoil_camber(t, x)
-        points.append((l * x, y))
-    
-    points.append((l, 0))
+        y = naca_airfoil_half_thickness_at(t, x)
+        yield l * x, y
+        
+    yield l, 0
 
-    n = len(points)
+    # TODO: This is computing the same points for the lower surface again which maybe
+    # inefficient computation wise. If we were to create an array and return, it would 
+    # waste memory. Try to find a better solution for this.
     for i in range(1, n-1):
-        points.append((points[n-(i + 1)][0], -points[n-(i + 1)][1]))
+        x = 1 - i / n
+        y = naca_airfoil_half_thickness_at(t, x)
+        yield l * x, -y
 
-    points.append(points[0])
-
-    return points
+    yield 0, 0
