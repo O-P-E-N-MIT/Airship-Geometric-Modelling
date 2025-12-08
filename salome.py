@@ -6,7 +6,7 @@ envelope_coeffs = (1.2, -0.8779, -3.1206, 5.9936, -4.9138, 1.7187)
 envelope_diameter = 25.91344908
 envelope_resolution = 100
 
-lobe_number = 3  
+lobe_number = 3
 lobe_offset_x = 13.333
 lobe_offset_y = 13.333/2
 lobe_offset_z = 7        
@@ -25,6 +25,8 @@ fin_sweep_angle = 0
 fin_tip_angle = 0             
 fin_number = 4                
 fin_theta_pos = [0, 90]    
+
+sheet_length_ratio = 0.75
 
 directory_path = "D:\\Airships\\Salome"
 final_object_name = "Airship"
@@ -166,8 +168,49 @@ else:
         fins.append(translate_object(geompy.MakeRotation(fin, OX, np.radians(theta)), 0, -1, 0))
         fins.append(translate_object(geompy.MakeRotation(fin, OX, np.radians(-theta)), 0, 1, 0))
 
-# Fuse all the lobes and fins to create the final airship model.
+# ---
+# Modelling of Thin Fairings
+# ---
+
+fairings = []
+
+# Creating a quadrilateral surface from the 4 points and give it a thickness in both directions normal to the surface.
+def create_fairing_quad (p1, p2, p3, p4):
+    fairing = geompy.MakeQuad4Vertices(geompy.MakeVertex(*p1), geompy.MakeVertex(*p2), geompy.MakeVertex(*p3), geompy.MakeVertex(*p4))
+    normal = geompy.MakeVectorDXDYDZ(*np.cross(np.array(p2) - np.array(p1), np.array(p3) - np.array(p1)))
+    fairings.append(geompy.MakePrismVecH2Ways(fairing, normal, 1e-7))
+
+if sheet_length_ratio:
+    sheet_length = envelope_length * sheet_length_ratio
+
+    # In case of a bi lobe design, only one fairing sheet is required.
+    if lobe_number == 2:
+        create_fairing_quad(
+            (envelope_length, -lobe_offset_y, 0),
+            (envelope_length, lobe_offset_y, 0),
+            (envelope_length - sheet_length, lobe_offset_y, 0),
+            (envelope_length - sheet_length, -lobe_offset_y, 0)
+        )
+
+    # In case of a tri lobe design, two fairing sheets are required.
+    elif lobe_number == 3:
+        create_fairing_quad(
+            (envelope_length, -lobe_offset_y, 0),
+            (central_lobe_length + lobe_offset_x, 0, lobe_offset_z),
+            (envelope_length - sheet_length, -lobe_offset_y, 0),
+            (central_lobe_length + lobe_offset_x - sheet_length, 0, lobe_offset_z),
+        )
+
+        create_fairing_quad(
+            (envelope_length, lobe_offset_y, 0),
+            (central_lobe_length + lobe_offset_x, 0, lobe_offset_z),
+            (envelope_length - sheet_length, lobe_offset_y, 0),
+            (central_lobe_length + lobe_offset_x - sheet_length, 0, lobe_offset_z),
+        )
+
+# For the final airship model, fuse whichever compounds can be fused while making compound for the rest.
 airship = geompy.MakeFuseList(lobes + fins)
+airship = geompy.MakeCompound([airship] + fairings)             # Fusing fairings results in corrupted shapes.
 airship_id = geompy.addToStudy(airship, final_object_name)
 
 # If Salome GUI is present, display the final airship model and update the object browser.
