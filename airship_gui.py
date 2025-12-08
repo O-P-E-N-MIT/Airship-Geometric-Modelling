@@ -1,4 +1,4 @@
-# airship_gui.py (Updated with LOTTE geometry)
+# airship_gui.py (Updated to include LOTTE Bi-Lobe shape)
 
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
@@ -6,16 +6,16 @@ import os
 import geometry_handler # Assumes geometry_handler.py is in the same directory
 
 # --- GLOBAL CONSTANTS ---
-# NOTE: The existing shapes are based on the Gertler polynomial (y^2 vs x).
-# LOTTE is based on the Piecewise function (y vs x), as defined in geometry_handler.py.
-# We include 'type': 'gertler' for existing shapes for compatibility with the handler.
+# NOTE: The LOTTE geometry uses Gertler parameters but has the "gertler_bilobe"
+# type to trigger the robust bi-lobe construction logic in geometry_handler.py.
 SHAPE_DEFINITIONS = {
     "GNVR (L/D=3.044)": {"m": 0.415, "r0": 0.600, "r1": 0.180, "cp": 0.615, "l2d": 3.044, "type": "gertler"},
     "ZHIYUAN-1 (L/D=3.266)": {"m": 0.419, "r0": 0.337, "r1": 0.251, "cp": 0.651, "l2d": 3.266, "type": "gertler"},
     "Wang (L/D=3.859)": {"m": 0.404, "r0": 0.600, "r1": 0.100, "cp": 0.610, "l2d": 3.859, "type": "gertler"},
     "NPL (L/D=4.000)": {"m": 0.432, "r0": 0.589, "r1": 0.425, "cp": 0.667, "l2d": 4.000, "type": "gertler"},
     "Sphere (L/D=1.000)": {"m": 0.500, "r0": 0.500, "r1": 0.500, "cp": 0.667, "l2d": 1.000, "type": "gertler"},
-    "LOTTE (L/D=3.902)": {"m": 0.4502, "r0": 0.5759, "r1": 0.1000, "cp": 0.5170, "l2d": 3.902, "type": "gertler"},
+    # VITAL: This line adds the LOTTE option to the GUI dropdown
+    "LOTTE (L/D=3.902)": {"m": 0.4502, "r0": 0.5759, "r1": 0.1000, "cp": 0.5170, "l2d": 3.902, "type": "gertler_bilobe"},
 }
 
 
@@ -95,6 +95,7 @@ class AirshipGeneratorApp:
             # Full screen mode (removes decorations, fills screen)
             screen_width = self.master.winfo_screenwidth()
             screen_height = self.master.winfo_screenheight()
+
             self.master.geometry(f'{screen_width}x{screen_height}+0+0')
             self.master.overrideredirect(True)
         else:
@@ -261,7 +262,6 @@ class AirshipGeneratorApp:
         selected_params = SHAPE_DEFINITIONS.get(shape_name)
 
         # 2. Call the external function from geometry_handler.py
-        # The selected_params dictionary now includes the 'type' key needed by the handler.
         result_message = geometry_handler.generate_and_run_geometry(
             shape_name,
             selected_params,
