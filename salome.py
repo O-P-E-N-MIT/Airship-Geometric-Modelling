@@ -4,10 +4,10 @@ envelope_length = 100
 envelope_coeffs = (1.2, -0.8779, -3.1206, 5.9936, -4.9138, 1.7187)
 # envelope_diameter = 25.62853
 envelope_diameter = 25.91344908
-envelope_resolution = 100     
+envelope_resolution = 100
 
 lobe_number = 3  
-lobe_offset_x = 13.333             
+lobe_offset_x = 13.333
 lobe_offset_y = 13.333/2
 lobe_offset_z = 7        
 
@@ -81,7 +81,10 @@ def create_envelope (coeffs, length, diameter):
     # produces a filled solid (revolving a face). If so, we can later just extract the surface
     # of the formed solid for structural analysis. This is not an issue for CFD meshing atleast.
     #
-    # TODO: Do the same for fins too.
+    # Using interpol also results in a rough surface of revolution which is not the case when
+    # using polyline. But, polyline fails in boolean operations. So, this is a tradeoff.
+    #
+    # TODO: Find a way to smoothen out the surface without any issues with boolean operations.
     envelope_wire = geompy.MakeWire([geompy.MakeInterpol(envelope_vertices, False, False), geompy.MakeLineTwoPnt(geompy.MakeVertex(length, 0, 0), O)], 1e-7)
     envelope_face = geompy.MakeFace(envelope_wire, 1)
     envelope = geompy.MakeRevolution(envelope_face, OX, 2 * np.pi)
@@ -131,7 +134,7 @@ rc_face = geompy.MakeFace(rc_wire, True)
 tc_face = geompy.MakeFace(tc_wire, True)
 
 # Modelling the planform surface of the fin as pipe from root chord to tip chord along the mid chord line.
-midchord_direction = [geompy.MakeVertex(0, 0, 0), geompy.MakeVertex(tc_axial_offset, 0, fin_height)]
+midchord_direction = [geompy.MakeVertex(rc_axial_offset, 0, 0), geompy.MakeVertex(tc_axial_offset, 0, fin_height)]
 planform_surface = geompy.MakePipeWithDifferentSectionsBySteps(
     [rc_wire, tc_wire],
     midchord_direction, 
@@ -139,12 +142,12 @@ planform_surface = geompy.MakePipeWithDifferentSectionsBySteps(
 )
 
 # Rotating the fin so that the trailing edge of the root chord intersects with the extreme lobe surface.
-x2, z2 = extreme_gertler.get_trailing_edge_intercept(fin_axial_offset, fin_rc_length)
+x2, z2 = extreme_gertler.get_trailing_edge_intercept(rc_axial_offset, fin_rc_length)
 fin = geompy.MakeSolid(geompy.MakeShell([planform_surface, rc_face, tc_face]))
 fin = geompy.MakeRotationThreePoints(
     fin, 
-    geompy.MakeVertex(fin_axial_offset, 0, rc_radial_offset),
-    geompy.MakeVertex(fin_axial_offset + fin_rc_length, 0, rc_radial_offset),
+    geompy.MakeVertex(rc_axial_offset, 0, rc_radial_offset),
+    geompy.MakeVertex(rc_axial_offset + fin_rc_length, 0, rc_radial_offset),
     geompy.MakeVertex(x2, 0, z2)
 )
 
