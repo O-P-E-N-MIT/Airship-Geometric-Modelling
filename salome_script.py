@@ -35,7 +35,6 @@ FINAL_OBJECT_NAME = "Airship"
 
 # Import all the required modules
 import salome
-import GEOM
 from salome.geom import geomBuilder
 import numpy as np
 import sys

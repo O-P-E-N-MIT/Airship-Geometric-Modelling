@@ -1,10 +1,12 @@
 __pycache__/
 archive/
-__main__.py
 test/
+exec_salome_temp.py
+
+*.png
 *.brep
 *.step
 *.stl
 *.iges
-exec_salome_temp.py
-*.png
+*.step
+*.stp
