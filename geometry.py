@@ -77,7 +77,7 @@ class AirshipGeometry:
 
         # Initiate the central lobe if it is a trilobe design.
         if lobe_number == 3:
-            self.central_lobe = self.init_lobe("CENTRAL_LOBE")
+            self.central_lobe = self.init_lobe("CENTRAL_LOBE", True)
         
         # In case of running in GUI, if the users wants a custom name for the Salome object.
         if "FINAL_OBJECT_NAME" not in self.parameters:
@@ -85,36 +85,50 @@ class AirshipGeometry:
         
         # Set the directory path.
         self.parameters["DIRECTORY_PATH"] = DIR_PATH
-
-    def init_lobe (self, id):
-        len = self.parameters[f"{id}_LENGTH"]
-        res = self.parameters[f"{id}_RESOLUTION"]
+    
+    def init_lobe (self, id, is_central = False):
+        res = self.parameters["ENVELOPE_RESOLUTION"]
         envelope = None
 
-        if f"{id}_SHAPE" in self.parameters:
-            shape_name = self.parameters[f"{id}_SHAPE"]
-
-            if shape_name in STANDARD_ENVELOPES:
-                env_params = STANDARD_ENVELOPES[shape_name]
-                envelope = GertlerEnvelope.from_parameters(env_params, len, res)
-            
-        elif f"{id}_PARAMS" in self.parameters:
-            env_params = self.parameters[f"{id}_PARAMS"]
-            envelope = GertlerEnvelope.from_parameters(env_params, len, res)
+        # Check if the Gertler parameters are given for the lobe geometry.
+        if (params := self.parameters.get(f"{id}_PARAMS")) is not None:
+            l2d = params[4]
+            len = self.parameters[f"{id}_LENGTH"] if f"{id}_LENGTH" in self.parameters else self.parameters[f"{id}_DIAMETER"] * l2d
+            envelope = GertlerEnvelope.from_parameters(params, len, res)
         
-        elif f"{id}_COEFFS" in self.parameters:
-            env_coeffs = self.parameters[f"{id}_COEFFS"]
-            envelope = GertlerEnvelope(env_coeffs, len, self.parameters[f"{id}_DIAMETER"], res)
+        # Check if the Gertler coefficients are given directly for the lobe geometry.
+        elif (coeffs := self.parameters.get(f"{id}_COEFFS")) is not None:
+            envelope = GertlerEnvelope(coeffs, self.parameters[f"{id}_LENGTH"], self.parameters[f"{id}_DIAMETER"], res)
 
-        self.parameters[f"{id}_COEFFS"] = [float(c) for c in envelope.coeffs]
+        # If it is a central lobe and the geometry is not explicitly provided.
+        elif is_central:
+            l2d = self.envelope.length / self.envelope.diameter
+            len = self.parameters[f"{id}_LENGTH"] if f"{id}_LENGTH" in self.parameters else self.parameters[f"{id}_DIAMETER"] * l2d
+            envelope = GertlerEnvelope(self.envelope.coeffs, len, len / l2d, res)
+
+        else:
+            raise Exception(f"AirshipGeometry: No proper shape parameters have been specified for {id}")
+        
+        # Assign all the required parameters for generation of the lobe.
+        self.parameters[f"{id}_COEFFS"] = envelope.coeffs
+        self.parameters[f"{id}_LENGTH"] = envelope.length
         self.parameters[f"{id}_DIAMETER"] = envelope.diameter
 
         return envelope
     
     # Generates the salome script to be executed.
     def script (self):
-        param_lines = [f'{key} = "{value}"' if isinstance(value, str) else f'{key} = {value}' for key, value in self.parameters.items()]
-        return f"{"\n".join(param_lines)}\n\n{BASE_SCRIPT}\n"
+        param_lines = ""
+
+        for key, value in self.parameters.items():
+            if isinstance(value, str):
+                param_lines += f'{key} = "{value}"\n'
+            elif isinstance(value, list) or isinstance(value, tuple):
+                param_lines += f'{key} = [{", ".join([str(x) for x in value])}]\n'
+            else:
+                param_lines += f'{key} = {value}\n'
+        
+        return f"{param_lines}\n\n{BASE_SCRIPT}\n"
     
     # Creates a temporary salome script file and executes it.
     #
