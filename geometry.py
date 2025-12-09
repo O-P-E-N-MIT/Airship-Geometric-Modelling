@@ -78,6 +78,14 @@ class AirshipGeometry:
         # Initiate the central lobe if it is a trilobe design.
         if lobe_number == 3:
             self.central_lobe = self.init_lobe("CENTRAL_LOBE", True)
+
+            # If a multi lobe offset factor is provided.
+            if (X := self.parameters.get("MULTI_LOBE_OFFSET_FACTOR")) is not None:
+                factor = X * self.central_lobe.diameter / 10
+
+                self.parameters["LOBE_OFFSET_X"] = factor
+                self.parameters["LOBE_OFFSET_Y"] = factor
+                self.parameters["LOBE_OFFSET_Z"] = factor / 2
         
         # In case of running in GUI, if the users wants a custom name for the Salome object.
         if "FINAL_OBJECT_NAME" not in self.parameters:
