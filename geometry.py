@@ -49,6 +49,40 @@ PARAMETER_CHECK = {
 
 class AirshipGeometry:
 
+    # List of all parameters
+    #
+    # ENVELOPE_PARAMS               Gertler parameters of the envelope
+    # ENVELOPE_LENGTH               Length of the envelope
+    # ENVELOPE_DIAMETER             Diameter of the envelope (either this or length has to be provided)
+    # ENVELOPE_RESOLUTION           Number of points to be taken to describe the envelope. (optional, default = 100)
+    # ENVELOPE_TRUNCATION_RATIO     Ratio of length to the total envelope length to be truncated. (optional, default = 0)
+    #
+    # LOBE_NUMBER                   Number of lobes (optional, default = 1)
+    # LOBE_OFFSET_X                 Distance of central lobe from YZ plane (optional)
+    # LOBE_OFFSET_Y                 Distance of extreme lobe from XZ plane (optional)
+    # LOBE_OFFSET_Z                 Distance of central lobe from XY plane (optional)
+    # MULTI_LOBE_OFFSET_FACTOR      X factor for trilobe design (optional)
+    #
+    # FIN_RC_LENGTH                 Root chord length of the fin
+    # FIN_AXIAL_OFFSET              Ratio of the distance between the nose of the extreme lobe and the leading edge of the root chord of the fin to the extreme lobe length.
+    # FIN_THICKNESS                 Ratio of the thickness of the symmetric NACA airfoil to it's chord length
+    # FIN_HEIGHT                    Height of the fin
+    # FIN_NUMBER                    Number of fins (optional, default = 4, must be even in case of multi lobe)
+    # FIN_TAPER_RATIO               Ratio of tip chord of the fin to its root chord (optional, default = 1)
+    # FIN_SWEEP_ANGLE               Angle between the midchord and the normal to the hull at that point in degrees (optional, default = 0)
+    # FIN_TIP ANGLE                 Angle between the tip airfoil with respect to root airfoil in degrees (optional, default = 0)
+    # FIN_THETA_POS                 Angle positions of each fin with respect to +Z in degrees (optional, default is evenly distributed).
+    #                               In case of multi lobe design, positions for only half of the fins on one side of the extreme lobe is to be provided.
+    # FIN_SECTION_RESOLUTION        Number of points used to represent the airfoil (optional, default = 50)
+    # 
+    # SHEET_LENGTH_RATIO            Ratio of the length of the extreme lobe length to be covered by the fairing sheets.
+    # FINAL_OBJECT_NAME             Name of the salome object (optional, default = Airship)
+    #
+    # The following central lobe parameters are for trilobe design in case of central lobe having different geometries than the extreme lobe.
+    # 
+    # CENTRAL_LOBE_PARAMS           Gertler parameters of the central lobe (optional)
+    # CENTRAL_LOBE_LENGTH           Length of the central lobe (optional)
+    # CENTRAL_LOBE_DIAMETER         Diameter of the central lobe (optional)
     def __init__ (self, parameters, salome_exec_path):
         self.parameters = parameters
         self.salome_exec_path = salome_exec_path
@@ -94,24 +128,27 @@ class AirshipGeometry:
         # Set the directory path.
         self.parameters["DIRECTORY_PATH"] = DIR_PATH
     
+    # TODO: This entire thing is overcomplicated and can be simplified I believe
     def init_lobe (self, id, is_central = False):
         res = self.parameters["ENVELOPE_RESOLUTION"]
+        len_key = f"{id}_LENGTH"
+        dia_key = f"{id}_DIAMETER"
         envelope = None
+
+        # If neither length or diameter is provided and is a central lobe, keep the dimensions same as the extreme lobe.
+        if is_central and (len_key not in self.parameters) and (dia_key not in self.parameters):
+            self.parameters[len_key] = self.envelope.length
 
         # Check if the Gertler parameters are given for the lobe geometry.
         if (params := self.parameters.get(f"{id}_PARAMS")) is not None:
             l2d = params[4]
-            len = self.parameters[f"{id}_LENGTH"] if f"{id}_LENGTH" in self.parameters else self.parameters[f"{id}_DIAMETER"] * l2d
+            len = self.parameters[len_key] if len_key in self.parameters else self.parameters[dia_key] * l2d
             envelope = GertlerEnvelope.from_parameters(params, len, res)
-        
-        # Check if the Gertler coefficients are given directly for the lobe geometry.
-        elif (coeffs := self.parameters.get(f"{id}_COEFFS")) is not None:
-            envelope = GertlerEnvelope(coeffs, self.parameters[f"{id}_LENGTH"], self.parameters[f"{id}_DIAMETER"], res)
 
         # If it is a central lobe and the geometry is not explicitly provided.
         elif is_central:
             l2d = self.envelope.length / self.envelope.diameter
-            len = self.parameters[f"{id}_LENGTH"] if f"{id}_LENGTH" in self.parameters else self.parameters[f"{id}_DIAMETER"] * l2d
+            len = self.parameters[len_key] if len_key in self.parameters else self.parameters[dia_key] * l2d
             envelope = GertlerEnvelope(self.envelope.coeffs, len, len / l2d, res)
 
         else:
@@ -119,8 +156,8 @@ class AirshipGeometry:
         
         # Assign all the required parameters for generation of the lobe.
         self.parameters[f"{id}_COEFFS"] = envelope.coeffs
-        self.parameters[f"{id}_LENGTH"] = envelope.length
-        self.parameters[f"{id}_DIAMETER"] = envelope.diameter
+        self.parameters[len_key] = envelope.length
+        self.parameters[dia_key] = envelope.diameter
 
         return envelope
     

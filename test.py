@@ -23,5 +23,5 @@ parameters = {
 
 geometry = AirshipGeometry(parameters, "C:\\SALOME-9.15.0\\run_salome.bat")
 
-print(geometry.run_salome(open_gui=False, remove_temp_script=False, export_format='BREP'))
+print(geometry.run_salome(open_gui=False, remove_temp_script=True, export_format='BREP'))
 plot_petal_profile(geometry.envelope, 3, 100, "envelope_profile.dat", shape_name="Envelope")
