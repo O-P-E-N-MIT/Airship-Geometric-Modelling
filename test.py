@@ -1,4 +1,4 @@
-from geometry import AirshipGeometry
+from geometry import AirshipGeometry, plot_petal_profile
 
 parameters = {
     "ENVELOPE_LENGTH": 100,
@@ -29,6 +29,7 @@ parameters = {
     "SHEET_LENGTH_RATIO": 0.75
 }
 
-cad = AirshipGeometry(parameters, "C:\\SALOME-9.15.0\\run_salome.bat")
+geometry = AirshipGeometry(parameters, "C:\\SALOME-9.15.0\\run_salome.bat")
 
-print(cad.run())
+print(geometry.run_salome(open_gui=True, remove_temp_script=True))
+plot_and_save_profile(geometry.envelope, 3, 100, "envelope_profile.dat", shape_name="Envelope")
