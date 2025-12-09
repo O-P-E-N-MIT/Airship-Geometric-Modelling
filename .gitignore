@@ -6,5 +6,4 @@ test/
 *.step
 *.stl
 *.iges
-test.py
 exec_salome_temp.py

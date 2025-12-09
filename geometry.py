@@ -19,12 +19,16 @@ BASE_SCRIPT = open(os.path.join(DIR_PATH, BASE_SCRIPT_FILE), 'r').read().split(B
 
 class AirshipGeometry:
 
+    # TODO: Add ways to make optional paramaters.
     def __init__ (self, parameters, salome_exec_path):
         self.parameters = parameters
         self.salome_exec_path = salome_exec_path
 
         self.envelope = self.init_lobe("ENVELOPE")
-        self.central_lobe = self.init_lobe("CENTRAL_LOBE")
+        self.lobe_number = self.paramaters["LOBE_NUMBER"]
+
+        if self.lobe_number == 3:
+            self.central_lobe = self.init_lobe("CENTRAL_LOBE", self.envelope)
         
         if "FINAL_OBJECT_NAME" not in self.parameters:
             self.parameters["FINAL_OBJECT_NAME"] = "Airship"
