@@ -41,7 +41,10 @@ class GertlerEnvelope:
         y = self.diameter * (self.coeffs[0]*x + self.coeffs[1]*x**2 + self.coeffs[2]*x**3 + self.coeffs[3]*x**4 + self.coeffs[4]*x**5 + self.coeffs[5]*x**6)**0.5
         return y
     
-    # Iterator to get the radial points along the length of envelope.
+    # Returns an array of points representing the Gertler envelope.
+    #
+    # NOTE: These points are not linearly scalable with length like NACA airfoils.
+    # NOTE: I have made use of numpy array here but an iterator function would be memory efficient I guess?
     def points (self, truncation = 0):
         X = np.linspace(0, 1 - truncation, self.n)
         R = np.polyval(self.coeffs[::-1] + [0], X)
@@ -70,6 +73,23 @@ class GertlerEnvelope:
             raise Exception("GertlerEnvelope: Unable to find the trailing edge intercept for the given parameters.")
 
         return (x1, y1)
+    
+    def petal_coordinates (self, petal_number, circumferential_divisons):
+        delta_phi = 2 * np.pi / petal_number
+        phi_half_width = delta_phi / 2.0
+        Phi = np.linspace(-phi_half_width, phi_half_width, circumferential_divisons)
+
+        coords_2D = []
+
+        for x, r in self.points():
+            for j in range(circumferential_divisons):
+                phi = Phi[j]
+                # C = R(X) * phi
+                C = r * phi
+
+                coords_2D.append((x, C))
+
+        return coords_2D
     
     # Returns the coefficients of the Gertler polynomial from standard parameters.
     def get_coefficients (params):
