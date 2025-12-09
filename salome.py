@@ -1,12 +1,11 @@
 # All the input paramaters required to generate the airship model.
-# envelope_coeffs = (1.1518, -5.69072152, 27.47050632, -61.83093344, 58.45423403, -19.55488538)
 envelope_length = 100           
 envelope_coeffs = (1.2, -0.8779, -3.1206, 5.9936, -4.9138, 1.7187)
-# envelope_diameter = 25.62853
 envelope_diameter = 25.91344908
 envelope_resolution = 100
+envelope_truncation_ratio = 0
 
-lobe_number = 2
+lobe_number = 3
 lobe_offset_x = 13.333
 lobe_offset_y = 13.333/2
 lobe_offset_z = 7        
@@ -74,7 +73,7 @@ def translate_object (object, x_offset, y_offset, z_offset):
 # A function to create the basic envelope geometry along OX.
 def create_envelope (coeffs, length, diameter):
     gertler = plotter.GertlerEnvelope(coeffs, length, diameter, envelope_resolution)
-    envelope_vertices = [geompy.MakeVertex(x, y, 0) for x, y in gertler.points()]
+    envelope_vertices = [geompy.MakeVertex(x, y, 0) for x, y in gertler.points(envelope_truncation_ratio)]
 
     # NOTE: Do not make use of Polyline anywhere else as it results in revolution of solids
     # which do not undergo boolean operation properly. Make use of interpol and wires instead.
@@ -87,7 +86,16 @@ def create_envelope (coeffs, length, diameter):
     # using polyline. But, polyline fails in boolean operations. So, this is a tradeoff.
     #
     # TODO: Find a way to smoothen out the surface without any issues with boolean operations.
-    envelope_wire = geompy.MakeWire([geompy.MakeInterpol(envelope_vertices, False, False), geompy.MakeLineTwoPnt(geompy.MakeVertex(length, 0, 0), O)], 1e-7)
+    envelope_edges = [geompy.MakeInterpol(envelope_vertices, False, False), geompy.MakeLineTwoPnt(geompy.MakeVertex(length * (1 - envelope_truncation_ratio), 0, 0), O)]
+
+    # When there is a truncation, we need to close the back end of the envelope as well. 
+    if envelope_truncation_ratio:
+        # In case of truncation ratio being very small, the lost point of the envelope can end up being very
+        # close to the axis resulting in errors.
+        try: envelope_edges.append(geompy.MakeLineTwoPnt(geompy.MakeVertex(length * (1 - envelope_truncation_ratio), geompy.PointCoordinates(envelope_vertices[-1])[1], 0), geompy.MakeVertex(length * (1 - envelope_truncation_ratio), 0, 0)))
+        except: pass
+
+    envelope_wire = geompy.MakeWire(envelope_edges, 1e-7)
     envelope_face = geompy.MakeFace(envelope_wire, 1)
     envelope = geompy.MakeRevolution(envelope_face, OX, 2 * np.pi)
     

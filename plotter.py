@@ -30,7 +30,7 @@ class GertlerEnvelope:
     # diameter = Maximum diameter of the envelope
     # n = Number of points to be generated along the length
     def __init__ (self, coeffs, length, diameter, n):
-        self.coeffs = coeffs
+        self.coeffs = list(coeffs)
         self.length = length
         self.diameter = diameter
         self.n = n
@@ -42,16 +42,16 @@ class GertlerEnvelope:
         return y
     
     # Iterator to get the radial points along the length of envelope.
-    def points (self):
-        for i in range(self.n):
-            x = i / self.n
-            y = self.diameter * (self.coeffs[0]*x + self.coeffs[1]*x**2 + self.coeffs[2]*x**3 + self.coeffs[3]*x**4 + self.coeffs[4]*x**5 + self.coeffs[5]*x**6)**0.5
-            yield (self.length * x, y)
+    def points (self, truncation = 0):
+        X = np.linspace(0, 1 - truncation, self.n)
+        R = np.polyval(self.coeffs[::-1] + [0], X)
+        R[R < 0] = 0
 
-        # NOTE: This point is yielded separately to avoid floating point inaccuracies but there is a chance
-        # that similar floating point inaccuracies may occur in the previous points as n value increases. Using
-        # a if loop to check for them may increase computation.
-        yield (self.length, 0)
+        # In case if there is no truncation, the final point must lie on the axis.
+        if not truncation:
+            R[-1] = 0 
+
+        return zip(X * self.length, self.diameter * np.sqrt(R))
 
     # Returns the coordinates of points on the envelope which intercepts the trailing edge of a fin.
     def get_trailing_edge_intercept (self, x, rc):
