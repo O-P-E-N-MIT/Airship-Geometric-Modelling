@@ -1,4 +1,5 @@
-# All the input paramaters required to generate the airship model.
+# INPUT PARAMETERS START 
+
 ENVELOPE_LENGTH = 100           
 ENVELOPE_COEFFS = (1.2, -0.8779, -3.1206, 5.9936, -4.9138, 1.7187)
 ENVELOPE_DIAMETER = 25.91344908
@@ -29,6 +30,8 @@ SHEET_LENGTH_RATIO = 0.75
 
 DIRECTORY_PATH = "D:\\Airships\\Salome"
 FINAL_OBJECT_NAME = "Airship"
+
+# INPUT PARAMETERS END
 
 # Import all the required modules
 import salome
