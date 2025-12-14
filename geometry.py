@@ -25,7 +25,7 @@ BASE_SCRIPT = open(os.path.join(DIR_PATH, BASE_SCRIPT_FILE), 'r').read().split(B
 # List of parameters to be checked.
 # NOTE: The value corresponding to the parameter is the default one while "None" means that the parameter is a required one.
 PARAMETER_CHECK = {
-    "ENVELOPE_LENGTH": None,
+    # "ENVELOPE_LENGTH": None,
     "ENVELOPE_RESOLUTION": 100,
     "ENVELOPE_TRUNCATION_RATIO": 0,
 
@@ -61,6 +61,8 @@ class AirshipGeometry:
     # LOBE_OFFSET_X                 Distance of central lobe from YZ plane (optional)
     # LOBE_OFFSET_Y                 Distance of extreme lobe from XZ plane (optional)
     # LOBE_OFFSET_Z                 Distance of central lobe from XY plane (optional)
+    #
+    # VOLUME                        Volume of the multi lobe envelope required. (optional, assumes central lobe and extreme lobe have same length and same shape)
     #
     # FIN_RC_LENGTH                 Root chord length of the fin
     # FIN_AXIAL_OFFSET              Ratio of the distance between the nose of the extreme lobe and the leading edge of the root chord of the fin to the extreme lobe length.
@@ -105,12 +107,21 @@ class AirshipGeometry:
         if "FIN_THETA_POS" not in parameters:
             parameters["FIN_THETA_POS"] = [i * 360 / fin_number for i in range(0, fin_number)] if lobe_number == 1 else [i * 360 / (fin_number - 2) for i in range(0, int(fin_number/2))]
 
-        # Initiate the extreme lobe.
-        self.envelope = self.init_lobe("ENVELOPE")
+        if "VOLUME" in parameters:
+            if "ENVELOPE_PARAMS" not in parameters:
+                raise Exception("AirshipGeometry: No proper shape parameters have been specified for ENVELOPE")
+            
+            # Specifying VOLUME parameter assumes both the extreme and central lobe have same shape and length.
+            # TODO: Make a more generalised way for volumetric input.
+            self.envelope = GertlerEnvelope.from_parameters_volume(parameters["ENVELOPE_PARAMS"], parameters["VOLUME"], parameters["ENVELOPE_RESOLUTION"], lobe_number, parameters["LOBE_OFFSET_X"], parameters["LOBE_OFFSET_Y"], parameters["LOBE_OFFSET_Z"])
+            self.central_lobe = self.envelope.copy()
+        else:
+            # Initiate the extreme lobe.
+            self.envelope = self.init_lobe("ENVELOPE")
 
-        # Initiate the central lobe if it is a trilobe design.
-        if lobe_number == 3:
-            self.central_lobe = self.init_lobe("CENTRAL_LOBE", True)
+            # Initiate the central lobe if it is a trilobe design.
+            if lobe_number == 3:
+                self.central_lobe = self.init_lobe("CENTRAL_LOBE", True)
         
         # In case of running in GUI, if the users wants a custom name for the Salome object.
         if "FINAL_OBJECT_NAME" not in self.parameters:

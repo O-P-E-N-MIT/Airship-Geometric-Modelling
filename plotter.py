@@ -66,8 +66,8 @@ class GertlerEnvelope:
         R = self.diameter * np.sqrt(R)
         X = self.length * X
 
-        # TODO: Zipping elements maybe a bad idea.
-        return zip(X, R) if tuples else X, R
+        # Zipping elements maybe a bad idea.
+        return zip(X, R) if tuples else (X, R)
     
     def petal_coordinates (self, petal_number, circumferential_divisons):
         delta_phi = 2 * np.pi / petal_number
@@ -117,7 +117,7 @@ class GertlerEnvelope:
     #
     # NOTE: For trilobe volume calculation, shapely module is used. Try to find some other way to compute
     # it other way which is more accurate and faster. Shapely calculations are not accurate but the error is
-    # often negligible.
+    # often negligible. There are no closed forms for trisection calculations.
     #
     # TODO: Test this properly as I only tried only with few specific cases. Later, optimise the code.
     def volume_trilobe (self, e, f, g, central_lobe = None):
@@ -189,6 +189,10 @@ class GertlerEnvelope:
     def set_length (self, l):
         self.length = l
         self.diameter = l * self.diameter / self.length
+
+    # Returns a copy of the envelope.
+    def copy (self):
+        return GertlerEnvelope(self.coeffs, self.length, self.diameter, self.n)
 
     # Returns the coefficients in an ordered way numpy usually accepts.
     @property
