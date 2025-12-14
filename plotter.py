@@ -10,6 +10,7 @@
 #
 # t = Maximum thickness as percentage of chord
 
+import math
 import numpy as np
 
 from shapely.geometry import Point
@@ -34,6 +35,9 @@ class GertlerEnvelope:
     # length = Length of the envelope
     # diameter = Maximum diameter of the envelope
     # n = Number of points to be generated along the length
+    #
+    # NOTE: Coefficients for Gertler Enevelope is to be of the following form. 
+    # a1 * x + a2 * x^2 + a3 * x^3 + a4 * x^4 + a5 * x^5 + a6 * x^6
     def __init__ (self, coeffs, length, diameter, n):
         self.coeffs = list(coeffs)
         self.length = length
@@ -50,9 +54,9 @@ class GertlerEnvelope:
     #
     # NOTE: These points are not linearly scalable with length like NACA airfoils.
     # NOTE: I have made use of numpy array here but an iterator function would be memory efficient I guess?
-    def points (self, truncation = 0, tuples = True, X = None):
-        X = np.linspace(0, 1 - truncation, self.n) if X is None else X
-        R = np.polyval(self.coeffs[::-1] + [0], X)
+    def points (self, truncation = 0, tuples = True):
+        X = np.linspace(0, 1 - truncation, self.n)
+        R = np.polyval(self.ordered_coeffs, X)
         R[R < 0] = 0
 
         # In case if there is no truncation, the final point must lie on the axis.
@@ -62,7 +66,7 @@ class GertlerEnvelope:
         R = self.diameter * np.sqrt(R)
         X = self.length * X
 
-        # TODO: Zipping elements maybe a bad idea 
+        # TODO: Zipping elements maybe a bad idea.
         return zip(X, R) if tuples else X, R
     
     def petal_coordinates (self, petal_number, circumferential_divisons):
@@ -114,23 +118,53 @@ class GertlerEnvelope:
     # NOTE: For trilobe volume calculation, shapely module is used. Try to find some other way to compute
     # it other way which is more accurate and faster. Shapely calculations are not accurate but the error is
     # often negligible.
-    # TODO: Test this properly as I only tried only with few specific cases.
+    #
+    # TODO: Test this properly as I only tried only with few specific cases. Later, optimise the code.
     def volume_trilobe (self, e, f, g, central_lobe = None):
         # If central lobe is not specified, itself is taken as central lobe.
         central_lobe = central_lobe or self
 
-        X, R = self.points(tuples=False)    # Array of extreme lobe coordinates
-        A = np.zeros(self.n)                # Array of intersections of cross section
+        # Determining how long should the discretized X axis should be taken for calculation.
+        last = max(self.length, e + central_lobe.length)
+        # NOTE: Number of elements taking the same as the main envelope is not a good idea.
+        X = np.linspace(0, last, self.n)
 
-        # Array of central lobe coordinates 
-        _, R2 = central_lobe.points(tuples=False, X=(X - e)/self.length)
+        # Getting the indices of position of start of central lobe, end of central lobe, end of extreme lobe in the
+        # discretized X axis. This may not be the best way to do this.
+        extreme_lobe_end_index = np.argmin(np.abs(X - self.length))
+        central_lobe_start_index = np.argmin(np.abs(X - e))
+        central_lobe_end_index = np.argmin(np.abs(X - (e + central_lobe.length)))
 
+        # Due to discretization of X axis, the extreme lobe length and distance of central lobe from Y axis will be
+        # different than the ideal values specified. Higher the value of n, closer will be to their ideal values.
+        # TODO: Again, this may not be the best way to do it.
+        extreme_lobe_length = X[extreme_lobe_end_index]     # Ideal value: self.envelope
+        central_lobe_start = X[central_lobe_start_index]    # Ideal value: e
+
+        # Radius of extreme lobe along the X axis
+        # NOTE: This maybe a crude way to do this wihout using .points()
+        R = np.zeros(self.n)
+        R[:extreme_lobe_end_index+1] = np.polyval(self.ordered_coeffs, X[:extreme_lobe_end_index+1] / extreme_lobe_length)
+        R[extreme_lobe_end_index:] = 0
+        R = self.diameter * np.sqrt(R)
+
+        # Radius of central lobe along the X axis.
+        R2 = np.zeros(self.n)
+        R2[central_lobe_start_index:] = np.polyval(central_lobe.ordered_coeffs, (X[central_lobe_start_index:] - central_lobe_start) / central_lobe.length)
+        R2[central_lobe_end_index:] = 0
+        R2 = central_lobe.diameter * np.sqrt(R2)
+
+        # Array of cross section area along the axis.
+        A = np.zeros(self.n)
+        
         for i in range(self.n):
             r = R[i]
             r2 = R2[i]
 
+            # Union of all the circle areas
             A[i] = unary_union([Point(-f, 0).buffer(r), Point(f, 0).buffer(r), Point(0, g).buffer(r2)]).area
 
+        # Integrating the area of cross section to get the volume.
         return np.trapezoid(A, X)
     
     # Returns the coordinates of points on the envelope which intercepts the trailing edge of a fin.
@@ -155,6 +189,11 @@ class GertlerEnvelope:
     def set_length (self, l):
         self.length = l
         self.diameter = l * self.diameter / self.length
+
+    # Returns the coefficients in an ordered way numpy usually accepts.
+    @property
+    def ordered_coeffs (self):
+        return self.coeffs[::-1] + [0]
 
     # Returns the coefficients of the Gertler polynomial from standard parameters.
     def get_coefficients (params):
@@ -202,7 +241,7 @@ class GertlerEnvelope:
         length = ((4 * volume * l2d**2) / (np.pi * cp))**(1/3)
 
         if lobe_number == 1:
-            # In case of monolobe, it is very simple.
+            # In case of monolobe, just pass the envelope
             return GertlerEnvelope(coeffs, length, length / l2d, n)
         else:
             # In case of multilobe, the formula for volume is complicated and scipy's fsolve is used to compute 

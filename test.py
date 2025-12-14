@@ -27,7 +27,9 @@ from geometry import AirshipGeometry, plot_petal_profile, STANDARD_ENVELOPES, Ge
 # print(geometry.run_salome(open_gui=False, remove_temp_script=True, export_format='BREP'))
 # plot_petal_profile(geometry.envelope, 3, 100, "envelope_profile.dat", shape_name="Envelope")
 
-envelope = GertlerEnvelope.from_parameters_volume(STANDARD_ENVELOPES["Wang"], 500, 100, lobe_number=2, f = 100)
+envelope = GertlerEnvelope.from_parameters(STANDARD_ENVELOPES["Wang"], 50, 1000)
+central_lobe = GertlerEnvelope.from_parameters(STANDARD_ENVELOPES["Wang"], 35, 1300)
 # print(envelope.points())
 
-print(envelope.volume_bilobe(100))
+# print(envelope.length)
+print(envelope.volume_trilobe(50, 1e+2, 1e+2, central_lobe), 2 * envelope.volume() + central_lobe.volume())
