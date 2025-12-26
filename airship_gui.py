@@ -80,6 +80,8 @@ class AirshipGUI(QMainWindow):
         self.setGeometry(100, 100, 1200, 900)
         self.salome_path = r"C:\SALOME-9.15.0\run_SALOME.bat"
         self.base_output_directory = os.path.join(os.getcwd(), "output")
+        self.current_session_folder = self.base_output_directory # Default fallback
+
         if not os.path.exists(self.base_output_directory):
             os.makedirs(self.base_output_directory)
 
@@ -182,9 +184,9 @@ class AirshipGUI(QMainWindow):
         is_vol = self.mode_button_group.checkedId() == 2; is_multi = self.lobe_button_group.checkedId() > 1
         self.length_box.setHidden(is_vol); self.volume_box.setHidden(not is_vol); self.offset_box.setHidden(not is_multi)
         curr = self.tab_widget.currentIndex(); self.tab_widget.clear()
-        self.tab_widget.addTab(self.primary_input_tab, "Envelope Geometry")
-        if is_multi: self.tab_widget.addTab(self.fairings_tab, "Fairing Sheet")
-        self.tab_widget.addTab(self.fin_tab, "Fin Design"); self.tab_widget.addTab(self.output_tab, "Output & Run")
+        self.tab_widget.addTab(self.primary_input_tab, "1. Envelope Geometry")
+        if is_multi: self.tab_widget.addTab(self.fairings_tab, "2. Fairing Sheet")
+        self.tab_widget.addTab(self.fin_tab, "3. Fin Design"); self.tab_widget.addTab(self.output_tab, "4. Output & Run")
         self.tab_widget.setCurrentIndex(min(curr, self.tab_widget.count()-1)); self.tab_widget.blockSignals(False)
 
     def setup_fairings_tab(self):
@@ -267,9 +269,10 @@ class AirshipGUI(QMainWindow):
         if selected_dir:
             self.base_output_directory = selected_dir
             self.dir_path_display.setText(selected_dir)
+            self.current_session_folder = selected_dir # Update fallback
 
-    def get_next_output_folder(self):
-        """Finds the next folder name following 'Output_N' convention."""
+    def create_new_output_folder(self):
+        """Creates and returns the path for a new folder (Output_N)."""
         existing = [d for d in os.listdir(self.base_output_directory) if os.path.isdir(os.path.join(self.base_output_directory, d))]
         indices = []
         for d in existing:
@@ -280,9 +283,10 @@ class AirshipGUI(QMainWindow):
         next_idx = max(indices) + 1 if indices else 1
         new_folder = os.path.join(self.base_output_directory, f"Output_{next_idx}")
         os.makedirs(new_folder)
+        self.current_session_folder = new_folder # Store for subsequent petal plots
         return new_folder
 
-    def get_parameters(self, current_output_dir):
+    def get_parameters(self, target_dir):
         p = {}
         slider_keys = ["ENVELOPE_LENGTH", "ENVELOPE_RESOLUTION", "m1", "r0", "r1", "cp", "l2d",
                        "FIN_AXIAL_OFFSET", "FIN_RC_LENGTH", "FIN_HEIGHT", "FIN_THICKNESS",
@@ -318,12 +322,13 @@ class AirshipGUI(QMainWindow):
         try:
             p["FIN_THETA_POS"] = [float(a.strip()) for a in theta_text.split(',') if a.strip()]
         except ValueError: return None
-        p["OUTPUT_DIRECTORY"] = current_output_dir
+        p["OUTPUT_DIRECTORY"] = target_dir
         return p
 
     def run_process(self):
         if AirshipGeometry is None: return
-        target_dir = self.get_next_output_folder()
+        # CREATE NEW FOLDER ONLY HERE
+        target_dir = self.create_new_output_folder()
         p = self.get_parameters(target_dir)
         if p is None: return
 
@@ -346,13 +351,14 @@ class AirshipGUI(QMainWindow):
                 with open(path, 'w') as f: f.write(content)
                 return path
             g._generate_salome_script = patched_generate
-            g.run_salome(False, p["FINAL_OBJECT_NAME"] + fmt_ext, fmt_name)
-            self.log.append(f"Run Saved in: {target_dir}")
+            g.run_salome(True, p["FINAL_OBJECT_NAME"] + fmt_ext, fmt_name)
+            self.log.append(f"Full generation saved in: {target_dir}")
         except Exception as e: self.log.append(f"Error: {e}")
 
     def generate_plot(self):
         if calculate_petal_coordinates is None: return
-        target_dir = self.get_next_output_folder()
+        # USE MOST RECENT FOLDER (OR BASE IF NO RUN YET)
+        target_dir = self.current_session_folder
         p = self.get_parameters(target_dir)
         if p is None: return
         try:
@@ -360,7 +366,7 @@ class AirshipGUI(QMainWindow):
             coords, nx, nc = calculate_petal_coordinates(p, L, int(p["N_PETALS"]))
             dat_file = os.path.join(target_dir, p["FINAL_OBJECT_NAME"]+".dat")
             msg = plot_and_save_profile(coords, p["FINAL_OBJECT_NAME"], dat_file, nx, nc, int(p["N_PETALS"]))
-            self.log.append(f"Plot saved in: {target_dir}")
+            self.log.append(f"Petal plot saved in: {target_dir}")
         except Exception as e: self.log.append(f"Plot Error: {e}")
 
     def load_defaults(self): self.load_preset(0)
@@ -395,4 +401,3 @@ if __name__ == '__main__':
     ex = AirshipGUI()
     ex.show()
     sys.exit(app.exec())
-
