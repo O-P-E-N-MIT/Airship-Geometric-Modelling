@@ -391,4 +391,8 @@ class AirshipGUI(QMainWindow):
         return nav
 
 if __name__ == '__main__':
-    app = QApplication(sys.argv); ex = AirshipGUI(); ex.show(); sys.exit(app.exec())
+    app = QApplication(sys.argv)
+    ex = AirshipGUI()
+    ex.show()
+    sys.exit(app.exec())
+
