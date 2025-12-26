@@ -8,7 +8,7 @@ from PySide6.QtWidgets import (
     QMessageBox, QFileDialog, QTextEdit, QSpacerItem,
     QRadioButton, QButtonGroup
 )
-from PySide6.QtGui import QFont, QDoubleValidator
+from PySide6.QtGui import QFont, QDoubleValidator, QScreen
 from PySide6.QtCore import Qt, Signal
 
 # --- HARDCODED PRESETS ---
@@ -77,15 +77,18 @@ class AirshipGUI(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Airship Geometry Generator | Salome Interface")
-        self.setGeometry(100, 100, 1200, 900)
-        self.salome_path = r"C:\SALOME-9.15.0\run_SALOME.bat"
 
-        # Consistent Base Path
+        # Dynamic Screen Aspect Ratio Scaling
+        screen = QApplication.primaryScreen().geometry()
+        self.resize(screen.width() * 0.7, screen.height() * 0.8)
+
+        self.salome_path = r"C:\SALOME-9.15.0\run_SALOME.bat" #Change this as per your system setup
         self.base_output_directory = os.path.join(os.path.expanduser("~"), "Documents", "Airship_Outputs")
+        self.current_session_folder = self.base_output_directory
+
         if not os.path.exists(self.base_output_directory):
             os.makedirs(self.base_output_directory)
 
-        self.current_session_folder = self.base_output_directory
         self.inputs = {}
         self.setup_style()
         self.central_widget = QWidget()
@@ -178,23 +181,42 @@ class AirshipGUI(QMainWindow):
 
         self.length_box = QGroupBox("Standard Mode: Length"); ll = QVBoxLayout(self.length_box); self.inputs["ENVELOPE_LENGTH"] = LabeledSlider("Length (L)", 10, 500, 100, 1, 1); ll.addWidget(self.inputs["ENVELOPE_LENGTH"]); layout.addWidget(self.length_box)
         self.volume_box = QGroupBox("Volumetric Mode: Volume"); vl = QVBoxLayout(self.volume_box); self.inputs["VOLUME"] = LabeledSlider("Volume (m³)", 100, 1000000, 5000, 10, 1); vl.addWidget(self.inputs["VOLUME"]); layout.addWidget(self.volume_box)
-        self.offset_box = QGroupBox("Multi-lobe Offsets"); ol = QGridLayout(self.offset_box); self.inputs["LOBE_OFFSET_X_SLIDER"] = LabeledSlider("X", 0, 50, 0, 0.1, 1); self.inputs["LOBE_OFFSET_Y_SLIDER"] = LabeledSlider("Y", 0, 50, 0, 0.1, 1); self.inputs["LOBE_OFFSET_Z_SLIDER"] = LabeledSlider("Z", 0, 50, 0, 0.1, 1); ol.addWidget(self.inputs["LOBE_OFFSET_X_SLIDER"], 0, 0); ol.addWidget(self.inputs["LOBE_OFFSET_Y_SLIDER"], 0, 1); ol.addWidget(self.inputs["LOBE_OFFSET_Z_SLIDER"], 0, 2); layout.addWidget(self.offset_box)
+        layout.addStretch()
+
+    def setup_fairings_tab(self):
+        layout = QVBoxLayout(self.fairings_tab)
+        self.offset_box = QGroupBox("Multi-lobe Positioning")
+        ol = QVBoxLayout(self.offset_box)
+        self.inputs["LOBE_OFFSET_X_SLIDER"] = LabeledSlider("X Offset (Longitudinal)", 0, 50, 0, 0.1, 1)
+        self.inputs["LOBE_OFFSET_Y_SLIDER"] = LabeledSlider("Y Offset (Lateral)", 0, 50, 0, 0.1, 1)
+        self.inputs["LOBE_OFFSET_Z_SLIDER"] = LabeledSlider("Z Offset (Vertical)", 0, 50, 0, 0.1, 1)
+        ol.addWidget(self.inputs["LOBE_OFFSET_X_SLIDER"])
+        ol.addWidget(self.inputs["LOBE_OFFSET_Y_SLIDER"])
+        ol.addWidget(self.inputs["LOBE_OFFSET_Z_SLIDER"])
+        layout.addWidget(self.offset_box)
+
+        self.fairing_param_box = QGroupBox("Fairing Sheet Parameters")
+        fl = QVBoxLayout(self.fairing_param_box)
+        self.inputs["SHEET_LENGTH_RATIO"] = LabeledSlider("Sheet Length Ratio", 0, 1, 0.5, 0.01, 2)
+        fl.addWidget(self.inputs["SHEET_LENGTH_RATIO"])
+        layout.addWidget(self.fairing_param_box)
         layout.addStretch()
 
     def refresh_tabs(self):
         self.tab_widget.blockSignals(True)
-        is_vol = self.mode_button_group.checkedId() == 2; is_multi = self.lobe_button_group.checkedId() > 1
-        self.length_box.setHidden(is_vol); self.volume_box.setHidden(not is_vol); self.offset_box.setHidden(not is_multi)
-        curr = self.tab_widget.currentIndex(); self.tab_widget.clear()
-        self.tab_widget.addTab(self.primary_input_tab, "1. Envelope Geometry")
-        if is_multi: self.tab_widget.addTab(self.fairings_tab, "2. Fairing Sheet")
-        self.tab_widget.addTab(self.fin_tab, "3. Fin Design"); self.tab_widget.addTab(self.output_tab, "4. Output & Run")
-        self.tab_widget.setCurrentIndex(min(curr, self.tab_widget.count()-1)); self.tab_widget.blockSignals(False)
-
-    def setup_fairings_tab(self):
-        layout = QVBoxLayout(self.fairings_tab)
-        self.inputs["SHEET_LENGTH_RATIO_SLIDER"] = LabeledSlider("Sheet Length Ratio", 0, 1, 0.5, 0.01, 2)
-        layout.addWidget(self.inputs["SHEET_LENGTH_RATIO_SLIDER"]); layout.addStretch()
+        is_vol = self.mode_button_group.checkedId() == 2
+        is_multi = self.lobe_button_group.checkedId() > 1
+        self.length_box.setHidden(is_vol)
+        self.volume_box.setHidden(not is_vol)
+        curr = self.tab_widget.currentIndex()
+        self.tab_widget.clear()
+        self.tab_widget.addTab(self.primary_input_tab, "Envelope Geometry")
+        if is_multi:
+            self.tab_widget.addTab(self.fairings_tab, "Fairing")
+        self.tab_widget.addTab(self.fin_tab, "Fin Design")
+        self.tab_widget.addTab(self.output_tab, "Output & Run")
+        self.tab_widget.setCurrentIndex(min(curr, self.tab_widget.count()-1))
+        self.tab_widget.blockSignals(False)
 
     def setup_fin_tab(self):
         main_layout = QVBoxLayout(self.fin_tab)
@@ -210,7 +232,6 @@ class AirshipGUI(QMainWindow):
         fin_dim_layout.addWidget(self.inputs["FIN_RC_LENGTH"], 0, 0); fin_dim_layout.addWidget(self.inputs["FIN_HEIGHT"], 0, 1); fin_dim_layout.addWidget(self.inputs["FIN_THICKNESS"], 0, 2)
         fin_dim_layout.addWidget(self.inputs["FIN_TAPER_RATIO"], 1, 0); fin_dim_layout.addWidget(self.inputs["FIN_AXIAL_OFFSET"], 1, 1); fin_dim_layout.addWidget(self.inputs["FIN_SECTION_RESOLUTION"], 1, 2)
         main_layout.addWidget(fin_dim_group)
-
         fin_sweep_group = QGroupBox("Fin Sweep and Configuration")
         fin_sweep_layout = QGridLayout(fin_sweep_group)
         self.inputs["FIN_SWEEP_ANGLE"] = LabeledSlider("Sweep Angle (Deg)", 0.0, 45.0, 0.0, 0.1, 1)
@@ -227,7 +248,6 @@ class AirshipGUI(QMainWindow):
         layout = QVBoxLayout(self.output_tab)
         self.inputs["FINAL_OBJECT_NAME"] = QLineEdit("Airship_Project")
         layout.addWidget(QLabel("Project Name:")); layout.addWidget(self.inputs["FINAL_OBJECT_NAME"])
-
         dir_group = QGroupBox("Base Output Directory")
         dir_layout = QHBoxLayout(dir_group)
         self.dir_path_display = QLineEdit(self.base_output_directory)
@@ -236,24 +256,19 @@ class AirshipGUI(QMainWindow):
         btn_browse.clicked.connect(self.browse_output_directory)
         dir_layout.addWidget(self.dir_path_display); dir_layout.addWidget(btn_browse)
         layout.addWidget(dir_group)
-
         self.inputs["N_PETALS"] = LabeledSlider("Gores/Petals", 2, 200, 8, 1, 0)
         layout.addWidget(self.inputs["N_PETALS"])
-
         self.format_button_group = QButtonGroup(self); h_lay = QHBoxLayout()
         for i, fmt in enumerate([".brep", ".stl", ".step"]):
             btn = QPushButton(fmt); btn.setCheckable(True); h_lay.addWidget(btn); self.format_button_group.addButton(btn, i); btn.setChecked(i==1)
         layout.addLayout(h_lay)
-
         btn_lay = QHBoxLayout()
         self.btn_run = QPushButton("RUN GENERATION")
         self.btn_run.setMinimumHeight(35); self.btn_run.setStyleSheet("background-color: #007ACC; color: white;")
         self.btn_run.clicked.connect(self.run_process)
-
         self.btn_plot = QPushButton("PLOT 2D PETAL")
         self.btn_plot.setMinimumHeight(35); self.btn_plot.setEnabled(False)
         self.btn_plot.clicked.connect(self.generate_plot)
-
         btn_lay.addWidget(self.btn_run); btn_lay.addWidget(self.btn_plot); layout.addLayout(btn_lay)
         self.log = QTextEdit("Status: Ready"); self.log.setReadOnly(True); layout.addWidget(self.log)
 
@@ -265,11 +280,8 @@ class AirshipGUI(QMainWindow):
             self.current_session_folder = selected_dir
 
     def create_new_output_folder(self):
-        """Robustly finds the next available Output_N folder in the current base directory."""
         if not os.path.exists(self.base_output_directory):
             os.makedirs(self.base_output_directory)
-
-        # Scan the folder for existing folders matching the pattern
         existing_items = os.listdir(self.base_output_directory)
         indices = []
         for item in existing_items:
@@ -277,7 +289,6 @@ class AirshipGUI(QMainWindow):
                 match = re.match(r"Output_(\d+)", item)
                 if match:
                     indices.append(int(match.group(1)))
-
         next_idx = max(indices) + 1 if indices else 1
         new_folder = os.path.join(self.base_output_directory, f"Output_{next_idx}")
         os.makedirs(new_folder)
@@ -286,24 +297,21 @@ class AirshipGUI(QMainWindow):
 
     def get_parameters(self, target_dir):
         p = {}
+        p["MULTI_LOBE_OFFSET_FACTOR"] = 0
         slider_keys = ["ENVELOPE_LENGTH", "ENVELOPE_RESOLUTION", "m1", "r0", "r1", "cp", "l2d",
                        "FIN_AXIAL_OFFSET", "FIN_RC_LENGTH", "FIN_HEIGHT", "FIN_THICKNESS",
                        "FIN_TAPER_RATIO", "FIN_SWEEP_ANGLE", "FIN_TIP_ANGLE", "FIN_NUMBER",
-                       "FIN_SECTION_RESOLUTION"]
+                       "FIN_SECTION_RESOLUTION", "SHEET_LENGTH_RATIO",
+                       "LOBE_OFFSET_X_SLIDER", "LOBE_OFFSET_Y_SLIDER", "LOBE_OFFSET_Z_SLIDER"]
         for key in slider_keys:
-            if key in self.inputs: p[key] = self.inputs[key].get_value()
+            if key in self.inputs:
+                p[key.replace("_SLIDER", "")] = self.inputs[key].get_value()
         p["N_PETALS"] = self.inputs["N_PETALS"].get_value()
-        p["LOBE_OFFSET_X"] = self.inputs["LOBE_OFFSET_X_SLIDER"].get_value()
-        p["LOBE_OFFSET_Y"] = self.inputs["LOBE_OFFSET_Y_SLIDER"].get_value()
-        p["LOBE_OFFSET_Z"] = self.inputs["LOBE_OFFSET_Z_SLIDER"].get_value()
-        p["MULTI_LOBE_OFFSET_FACTOR"] = 0
-        p["SHEET_LENGTH_RATIO"] = self.inputs["SHEET_LENGTH_RATIO_SLIDER"].get_value()
         lobe_id = self.lobe_button_group.checkedId()
         p["LOBE_NUMBER"] = lobe_id if lobe_id != -1 else 1
         p["ENVELOPE_PARAMS"] = (p["m1"], p["r0"], p["r1"], p["cp"], p["l2d"])
         p["FINAL_OBJECT_NAME"] = self.inputs["FINAL_OBJECT_NAME"].text()
         p["type"] = self.preset_combo.currentText().split(" ")[0]
-
         is_vol = self.mode_button_group.checkedId() == 2
         hull_len = p.get("ENVELOPE_LENGTH", 100.0)
         if is_vol:
@@ -329,7 +337,7 @@ class AirshipGUI(QMainWindow):
         p = self.get_parameters(target_dir)
         if p is None: return
         fmt_idx = self.format_button_group.checkedId()
-        fmt_ext = [".brep", ".stl", ".step"][fmt_idx]; fmt_name = ["BREP", "STL", "STEP"][fmt_idx]
+        fmt_ext = [".brep", ".stl", ".step"][fmt_idx]
         export_path = os.path.join(target_dir, p["FINAL_OBJECT_NAME"] + fmt_ext)
         try:
             g = AirshipGeometry(p, self.salome_path)
@@ -337,15 +345,19 @@ class AirshipGUI(QMainWindow):
             def patched_generate(export_file, export_format, open_gui):
                 path = original_generate(export_path, export_format, open_gui)
                 with open(path, 'r') as f: content = f.read()
+
+                # USER REQUESTED STL LOGIC
                 if export_format == "STL":
                     stl_export_logic = (f"\n# --- User STL Export ---\nimport GEOM\n"
                                         f"geompy.ExportSTL(Final_Hull_Solid, r'{export_path}', False)\n"
                                         f"print('Exported STL successfully.')\n")
                     content += stl_export_logic
+
                 with open(path, 'w') as f: f.write(content)
                 return path
+
             g._generate_salome_script = patched_generate
-            g.run_salome(False, p["FINAL_OBJECT_NAME"] + fmt_ext, fmt_name)
+            g.run_salome(True, p["FINAL_OBJECT_NAME"] + fmt_ext, ["BREP", "STL", "STEP"][fmt_idx])
             self.btn_plot.setEnabled(True)
             self.log.append(f"Geometry saved in: {target_dir}")
         except Exception as e: self.log.append(f"Error: {e}")
