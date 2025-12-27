@@ -1,4 +1,4 @@
-## Framework for Airfoil CFD and Analysis Optimization (FALCON)
+## Framework for Airship Geometry Generator
 <a name="top"></a>
 
 [![OS](https://img.shields.io/badge/OS-linux%2C%20windows%2C%20macOS-0078D4)]()
