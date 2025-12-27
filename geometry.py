@@ -291,3 +291,17 @@ class AirshipGeometry:
             raise FileNotFoundError(f"Salome launcher not found at: {salome_launcher}. Check path in airship_gui.py.")
         except Exception as e:
             raise RuntimeError(f"Salome execution failed unexpectedly. Error: {e}")
+        
+    def geometric_properties (self):
+        envelope = GertlerEnvelope.from_parameters(self.params["ENVELOPE_PARAMS"], self.params["ENVELOPE_LENGTH"], self.params["ENVELOPE_RESOLUTION"])
+        lobe_number = self.params["LOBE_NUMBER"]
+        e = self.params["LOBE_OFFSET_X"]
+        f = self.params["LOBE_OFFSET_Y"]
+        g = self.params["LOBE_OFFSET_Z"]
+
+        if lobe_number == 1:
+            return envelope.volume(), envelope.surface_area()
+        elif lobe_number == 2:
+            return envelope.volume_bilobe(f), envelope.surface_area_bilobe(f)
+        else:
+            return envelope.volume_trilobe(e, f, g), envelope.surface_area_trilobe(e, f, g)

@@ -100,6 +100,11 @@ class GertlerEnvelope:
         # pi x D^2 x L x cp/4
         return np.pi * (self.diameter**2) * self.length * np.dot(self.coeffs, [1/2, 1/3, 1/4, 1/5, 1/6, 1/7])
     
+    # Returns the surface area of the envelope (mono lobe).
+    def surface_area (self):
+        X, R = self.points(tuples=False) 
+        return np.trapezoid(2 * np.pi * R, X)
+    
     # Returns the volume of a bilobed envelope.
     #
     # f = Distance of the extreme lobe from X axis.
@@ -118,6 +123,16 @@ class GertlerEnvelope:
         # 2 * (Volume of the lobes) - Intersection of both the lobes
         return 2 * self.volume() - np.trapezoid(A, X)
     
+    # Returns the surface area of bilobe.
+    def surface_area_bilobe (self, f):
+        X, R = self.points(tuples=False) 
+        
+        P = 4 * R
+        P[R >= f] *= np.pi - np.arccos(f / (2 * R[R >= f]))
+        P[R < f] *= np.pi
+
+        return np.trapezoid(P, X)
+    
     # Returns the volume of a trilobed envelope.
     #
     # e = Distance of central lobe from Y axis
@@ -130,43 +145,13 @@ class GertlerEnvelope:
     #
     # TODO: Test this properly as I only tried only with few specific cases. Later, optimise the code.
     def volume_trilobe (self, e, f, g, central_lobe = None):
-        # If central lobe is not specified, itself is taken as central lobe.
-        central_lobe = central_lobe or self
-
-        # Determining how long should the discretized X axis should be taken for calculation.
-        last = max(self.length, e + central_lobe.length)
-        # NOTE: Number of elements taking the same as the main envelope is not a good idea.
-        X = np.linspace(0, last, self.n)
-
-        # Getting the indices of position of start of central lobe, end of central lobe, end of extreme lobe in the
-        # discretized X axis. This may not be the best way to do this.
-        extreme_lobe_end_index = np.argmin(np.abs(X - self.length))
-        central_lobe_start_index = np.argmin(np.abs(X - e))
-        central_lobe_end_index = np.argmin(np.abs(X - (e + central_lobe.length)))
-
-        # Due to discretization of X axis, the extreme lobe length and distance of central lobe from Y axis will be
-        # different than the ideal values specified. Higher the value of n, closer will be to their ideal values.
-        # TODO: Again, this may not be the best way to do it.
-        extreme_lobe_length = X[extreme_lobe_end_index]     # Ideal value: self.envelope
-        central_lobe_start = X[central_lobe_start_index]    # Ideal value: e
-
-        # Radius of extreme lobe along the X axis
-        # NOTE: This maybe a crude way to do this wihout using .points()
-        R = np.zeros(self.n)
-        R[:extreme_lobe_end_index+1] = np.polyval(self.ordered_coeffs, X[:extreme_lobe_end_index+1] / extreme_lobe_length)
-        R[extreme_lobe_end_index:] = 0
-        R = self.diameter * np.sqrt(R)
-
-        # Radius of central lobe along the X axis.
-        R2 = np.zeros(self.n)
-        R2[central_lobe_start_index:] = np.polyval(central_lobe.ordered_coeffs, (X[central_lobe_start_index:] - central_lobe_start) / central_lobe.length)
-        R2[central_lobe_end_index:] = 0
-        R2 = central_lobe.diameter * np.sqrt(R2)
+        # If central lobe is not provided, itself is taken as central lobe.
+        X, R, R2 = get_trilobe_axis(self, central_lobe or self, e)
 
         # Array of cross section area along the axis.
-        A = np.zeros(self.n)
-        
-        for i in range(self.n):
+        A = np.zeros_like(X)
+
+        for i in range(len(X)):
             r = R[i]
             r2 = R2[i]
 
@@ -175,6 +160,24 @@ class GertlerEnvelope:
 
         # Integrating the area of cross section to get the volume.
         return np.trapezoid(A, X)
+    
+    # Returns the surface area of a trilobe design.
+    def surface_area_trilobe (self, e, f, g, central_lobe = None):
+        # If central lobe is not provided, itself is taken as central lobe.
+        X, R, R2 = get_trilobe_axis(self, central_lobe or self, e)
+
+        # Array of perimeters along the axis.
+        P = np.zeros_like(X)
+
+        for i in range(len(X)):
+            r = R[i]
+            r2 = R2[i]
+
+            # Union of all the circle areas
+            P[i] = unary_union([Point(-f, 0).buffer(r), Point(f, 0).buffer(r), Point(0, g).buffer(r2)]).length
+
+        # Integrating the area of cross section to get the volume.
+        return np.trapezoid(P, X)
     
     # Returns the coordinates of points on the envelope which intercepts the trailing edge of a fin and the necessary intercept offset.
     def get_fin_intercept (self, x, rc):
@@ -336,9 +339,44 @@ def naca_airfoil_points (t, n, l = 1):
 
     yield 0, 0
 
+# Length scaling for fuzzy solve.
 def length_scaling (volume_function, target_volume, initial_estimate):
     def f (l):
         volume = volume_function(l)
         return (target_volume - volume) / target_volume
     
     return fsolve(f, initial_estimate)[0]
+
+# Gets a common trilobe axis for both extreme and central lobe.
+def get_trilobe_axis (extreme_lobe, central_lobe, e):
+    # Determining how long should the discretized X axis should be taken for calculation.
+    last = max(extreme_lobe.length, e + central_lobe.length)
+    # NOTE: Number of elements taking the same as the main envelope is not a good idea.
+    X = np.linspace(0, last, extreme_lobe.n)
+
+    # Getting the indices of position of start of central lobe, end of central lobe, end of extreme lobe in the
+    # discretized X axis. This may not be the best way to do this.
+    extreme_lobe_end_index = np.argmin(np.abs(X - extreme_lobe.length))
+    central_lobe_start_index = np.argmin(np.abs(X - e))
+    central_lobe_end_index = np.argmin(np.abs(X - (e + central_lobe.length)))
+
+    # Due to discretization of X axis, the extreme lobe length and distance of central lobe from Y axis will be
+    # different than the ideal values specified. Higher the value of n, closer will be to their ideal values.
+    # TODO: Again, this may not be the best way to do it.
+    extreme_lobe_length = X[extreme_lobe_end_index]     # Ideal value: self.envelope
+    central_lobe_start = X[central_lobe_start_index]    # Ideal value: e
+
+    # Radius of extreme lobe along the X axis
+    # NOTE: This maybe a crude way to do this wihout using .points()
+    R = np.zeros_like(X)
+    R[:extreme_lobe_end_index+1] = np.polyval(extreme_lobe.ordered_coeffs, X[:extreme_lobe_end_index+1] / extreme_lobe_length)
+    R[extreme_lobe_end_index:] = 0
+    R = extreme_lobe.diameter * np.sqrt(R)
+
+    # Radius of central lobe along the X axis.
+    R2 = np.zeros_like(X)
+    R2[central_lobe_start_index:] = np.polyval(central_lobe.ordered_coeffs, (X[central_lobe_start_index:] - central_lobe_start) / central_lobe.length)
+    R2[central_lobe_end_index:] = 0
+    R2 = central_lobe.diameter * np.sqrt(R2)
+
+    return X, R, R2
