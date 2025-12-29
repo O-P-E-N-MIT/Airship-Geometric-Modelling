@@ -8,17 +8,17 @@
 
 ### About
 
-The Airship Geometry Generator is an open-source Python-based framework designed to facilitate the design and 3D modeling of advanced airship hull geometries. It specializes in Gertler Envelope parametrization, allowing users to define complex aerodynamic shapes through specific geometric coefficients like maximum thickness position, nose/tail radii, and prismatic coefficients. The framework integrates with SALOME for automated 3D CAD generation and features a developed 2D petal (gore) generator for manufacturing preparation.
+The Airship Geometry Generator is an open-source Python-based framework designed to facilitate the design and 3D modeling of advanced airship hull geometries. It specializes in Gertler Envelope parametrization, allowing users to define complex aerodynamic shapes through specific geometric coefficients, such as maximum thickness position, nose/tail radii, and prismatic coefficients. The framework integrates with SALOME for automated 3D CAD generation and features a developed 2D petal (gore) generator for manufacturing preparation.
 
 ### Features
 
-* User-friendly and easily accesible GUI.
+* User-friendly and easily accessible GUI.
 
-* Support for Monolobe, Bilobe and Trilobe hull design with adjustable separation offset.
+* Support for Conventional, Bilobe, and Trilobe hull design with adjustable separation offset.
 
 * Precise control over hull shapes using $m1$, $r0$, $r1$, $cp$ and $l/d$ coefficients.
 
-* Automated generation of fins based on NACA 4-digit airfoil profile with adjustable sweep, taper and axial positioning.
+* Automated generation of fins based on NACA 4-digit airfoil profile with adjustable sweep, taper, and axial positioning.
 
 * Automated calculation of hull length based on a target volume requirement and lobe configuration.
 
@@ -60,7 +60,7 @@ python3 airship_gui.py
 
 * Set the Gertler parameters or select a standard preset in the Standard Envelope dropdown.
 
-* Select the number of lobes and set separation offsets.
+* Select the number of lobes and set the lobes' separation offsets.
 
 * Configure fin dimensions or uncheck "GENERATE FINS WITH HULL" for a hull-only model.
 
