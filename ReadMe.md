@@ -66,6 +66,11 @@ python3 airship_gui.py
 
 * Click RUN GENERATION in the Output tab to trigger the SALOME script and export your 3D model.
 
+### Cite As
+
+```bash
+Anantha Hari Arun Pedapudi, Sudarsan D. Naidu, and Manikandan Murugaiah "XXXXXX: Framework for Airship Geometry Generator", https://github.com/O-P-E-N-MIT/Airship-Geometric-Modelling
+```
 ### References
 1. Manikandan, M., Shah, R. R., Priyan, P., Singh, B., & Pant, R. S. (2023). A parametric design approach for multi-lobed hybrid airships. The Aeronautical Journal, 128(1319), 1–36. https://doi.org/10.1017/aer.2023.37
 
