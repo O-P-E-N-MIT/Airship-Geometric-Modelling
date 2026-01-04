@@ -14,6 +14,7 @@ def apply_filters_to_meshset (ms, **kwargs):
     if ("targetfacenum" not in kwargs) and ("targetperc" not in kwargs):
         # kwargs["targetfacenum"] = 5000
         kwargs["targetperc"] = 0.3
+        # kwargs["targetfacenum"] = 3192
 
     # Quadratic Edge Collapse Decimation method
     ms.meshing_decimation_quadric_edge_collapse(
@@ -37,6 +38,9 @@ def apply_filters (filename, **kwargs):
 
     # Apply the required filters
     apply_filters_to_meshset(ms, **kwargs)
+    
+    # Save the current mesh.
+    ms.save_current_mesh(filename)
 
     return ms
 
