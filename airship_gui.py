@@ -10,8 +10,13 @@ from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QTabWidget, QVBoxLayout,
     QHBoxLayout, QGridLayout, QLabel, QLineEdit, QPushButton,
     QComboBox, QSlider, QGroupBox, QFileDialog, QTextEdit,
-    QButtonGroup, QCheckBox, QMessageBox
+    QButtonGroup, QCheckBox, QMessageBox, QSplitter, QTableWidget,
+    QTableWidgetItem, QHeaderView
 )
+
+# --- 3D VISUALIZATION IMPORTS ---
+import pyvista as pv
+from pyvistaqt import BackgroundPlotter
 
 from geometry import AirshipGeometry, plot_and_save_profile
 from geometry_handler import STANDARD_ENVELOPES
@@ -51,9 +56,10 @@ class GenerationWorker(QObject):
 
     def run(self):
         try:
+            output_path = os.path.join(self.params['OUTPUT_DIRECTORY'], f"{self.params['FINAL_OBJECT_NAME']}.stl")
+
             if self.mode_id == 3: # BALLOON MODE
                 print(f"[PROCESS] Starting Superpressure Balloon generation...")
-                output_path = os.path.join(self.params['OUTPUT_DIRECTORY'], f"{self.params['FINAL_OBJECT_NAME']}.stl")
                 create_balloon_geometry(
                     gore_model=self.gore_model,
                     target_volume=self.volume_val,
@@ -65,12 +71,16 @@ class GenerationWorker(QObject):
                     single_gore=False
                 )
                 print(f"[SUCCESS] Balloon STL generated at: {output_path}")
-                self.finished.emit(None)
+                self.finished.emit((None, output_path))
+
             else: # AIRSHIP MODES
-                print(f"[PROCESS] Launching Salome subprocess for {self.params['EXPORT_FORMAT']} export...")
+                print(f"[PROCESS] Launching Salome subprocess for STL export...")
                 g = AirshipGeometry(self.params, self.params['SALOME_PATH'])
-                process, matrix = g.run_salome(self.params['EXPORT_FORMAT'])
-                self.finished.emit(matrix)
+                # Force STL generation for the 3D previewer
+                process, matrix = g.run_salome("STL")
+                print(f"[SUCCESS] Airship STL generated at: {output_path}")
+                self.finished.emit((matrix, output_path))
+
         except Exception as e:
             self.error.emit(str(e))
 
@@ -95,7 +105,8 @@ class LabeledSlider (QGroupBox):
         self.value_editor.setValidator(QDoubleValidator(min_val, max_val, decimals))
 
         h_layout = QHBoxLayout()
-        h_layout.addWidget(self.slider); h_layout.addWidget(self.value_editor)
+        h_layout.addWidget(self.slider)
+        h_layout.addWidget(self.value_editor)
         layout = QVBoxLayout(self)
         layout.addLayout(h_layout)
 
@@ -126,7 +137,7 @@ class AirshipGUI(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Airship Geometry Generator | Salome Interface")
-        self.setGeometry(100, 100, 1200, 900)
+        self.setGeometry(100, 100, 1400, 950)
 
         self.salome_path = r"C:\SALOME-9.15.0\run_SALOME.bat"
         self.base_output_directory = os.path.join(os.path.expanduser("~"), "Documents", "Airship_Outputs")
@@ -156,7 +167,7 @@ class AirshipGUI(QMainWindow):
         self.main_layout.addWidget(self.tab_widget)
         self.main_layout.addWidget(self.setup_navigation_buttons())
 
-        self.tab_widget.currentChanged.connect(self._update_navigation_buttons)
+        self.tab_widget.currentChanged.connect(self._on_tab_changed)
 
         self.refresh_tabs()
         self.load_defaults()
@@ -166,6 +177,14 @@ class AirshipGUI(QMainWindow):
         self.status_logger.message_logged.connect(self._append_to_log)
         sys.stdout = self.status_logger
 
+    def _on_tab_changed(self, index):
+        """Refreshes navigation and attempts to load existing mesh on Output tab."""
+        self._update_navigation_buttons()
+        if self.tab_widget.tabText(index).startswith("Output"):
+            proj_name = self.inputs["FINAL_OBJECT_NAME"].text()
+            path = os.path.join(self.current_session_folder, f"{proj_name}.stl")
+            self._update_3d_view(path)
+
     def _append_to_log(self, text):
         self.log.append(text)
 
@@ -173,30 +192,42 @@ class AirshipGUI(QMainWindow):
         self.mode_button_group = QButtonGroup(self)
         self.mode_btns = []
         for i, name in enumerate(["STANDARD MODE", "VOLUMETRIC MODE", "SUPER PRESSURE BALLOON"], 1):
-            btn = QPushButton(name); btn.setCheckable(True); btn.setMinimumHeight(40)
+            btn = QPushButton(name)
+            btn.setCheckable(True)
+            btn.setMinimumHeight(40)
             btn.setFont(QFont("Arial", 10, QFont.Bold))
-            self.mode_button_group.addButton(btn, i); self.mode_btns.append(btn)
+            self.mode_button_group.addButton(btn, i)
+            self.mode_btns.append(btn)
         self.mode_btns[0].setChecked(True)
 
         self.lobe_button_group = QButtonGroup(self)
         self.lobe_btns = []
         for i, name in enumerate(["MONOLOBE", "BILOBE", "TRILOBE"], 1):
-            btn = QPushButton(name); btn.setCheckable(True); btn.setMinimumHeight(40)
+            btn = QPushButton(name)
+            btn.setCheckable(True)
+            btn.setMinimumHeight(40)
             btn.setFont(QFont("Arial", 10, QFont.Bold))
-            self.lobe_button_group.addButton(btn, i); self.lobe_btns.append(btn)
+            self.lobe_button_group.addButton(btn, i)
+            self.lobe_btns.append(btn)
         self.lobe_btns[0].setChecked(True)
 
         for btn in self.mode_btns: btn.clicked.connect(self.refresh_tabs)
         for btn in self.lobe_btns: btn.clicked.connect(self.refresh_tabs)
 
         self.header_widget = QWidget()
-        h_layout = QVBoxLayout(self.header_widget); h_layout.setContentsMargins(0, 0, 0, 0)
-        m_grp = QGroupBox("Dimensioning Mode"); m_lay = QHBoxLayout(m_grp)
+        h_layout = QVBoxLayout(self.header_widget)
+        h_layout.setContentsMargins(0, 0, 0, 0)
+
+        m_grp = QGroupBox("Dimensioning Mode")
+        m_lay = QHBoxLayout(m_grp)
         for btn in self.mode_btns: m_lay.addWidget(btn)
+
         self.hull_config_group = QGroupBox("Hull Configuration")
         l_lay = QHBoxLayout(self.hull_config_group)
         for btn in self.lobe_btns: l_lay.addWidget(btn)
-        h_layout.addWidget(m_grp); h_layout.addWidget(self.hull_config_group)
+
+        h_layout.addWidget(m_grp)
+        h_layout.addWidget(self.hull_config_group)
 
     def setup_style(self):
         self.setStyleSheet("""
@@ -206,7 +237,8 @@ class AirshipGUI(QMainWindow):
             QTabBar::tab:selected { background: #252526; border-top: 3px solid #00BFFF; }
             QGroupBox { border: 1px solid #3c3c3c; margin-top: 15px; font-weight: bold; }
             QGroupBox::title { subcontrol-origin: margin; color: #00BFFF; padding: 0 5px; }
-            QLineEdit, QTextEdit { background-color: #3C3C3C; border: 1px solid #3c3c3c; color: #D4D4D4; }
+            QLineEdit, QTextEdit, QTableWidget { background-color: #3C3C3C; border: 1px solid #3c3c3c; color: #D4D4D4; }
+            QHeaderView::section { background-color: #2D2D2D; color: #00BFFF; padding: 4px; border: 1px solid #3c3c3c; font-weight: bold; }
             QComboBox#LargeDropdown { background-color: #3C3C3C; border: 2px solid #00BFFF; padding: 8px; border-radius: 4px; font-size: 11pt; font-weight: bold; color: #FFFFFF; }
             QPushButton { background-color: #3C3C3C; border: 1px solid #3c3c3c; padding: 8px; border-radius: 4px; color: #D4D4D4; }
             QPushButton:hover { background-color: #505050; border: 1px solid #00BFFF; }
@@ -227,14 +259,18 @@ class AirshipGUI(QMainWindow):
         """)
 
     def setup_primary_tab_layout(self):
-        layout = QVBoxLayout(self.primary_input_tab); layout.addWidget(self.header_widget)
+        layout = QVBoxLayout(self.primary_input_tab)
+        layout.addWidget(self.header_widget)
 
         self.hull_shape_box = QGroupBox("Hull Envelope Shape")
         cl = QGridLayout(self.hull_shape_box)
-        self.preset_combo = QComboBox(); self.preset_combo.setObjectName("LargeDropdown")
-        self.preset_combo.setMinimumHeight(45); self.preset_combo.addItems(list(STANDARD_ENVELOPES.keys()))
+        self.preset_combo = QComboBox()
+        self.preset_combo.setObjectName("LargeDropdown")
+        self.preset_combo.setMinimumHeight(45)
+        self.preset_combo.addItems(list(STANDARD_ENVELOPES.keys()))
         self.preset_combo.currentIndexChanged.connect(self.load_preset)
-        cl.addWidget(QLabel("Shape Preset:"), 0, 0); cl.addWidget(self.preset_combo, 0, 1, 1, 2)
+        cl.addWidget(QLabel("Shape Preset:"), 0, 0)
+        cl.addWidget(self.preset_combo, 0, 1, 1, 2)
 
         self.inputs["l2d"] = LabeledSlider("L/D Ratio", 1, 8, 3.266, 0.0001, 4)
         self.inputs["m1"] = LabeledSlider("m1", 0.3, 0.6, 0.419, 0.0001, 4)
@@ -243,14 +279,18 @@ class AirshipGUI(QMainWindow):
         self.inputs["cp"] = LabeledSlider("cp", 0.5, 0.8, 0.651, 0.0001, 4)
         self.inputs["ENVELOPE_RESOLUTION"] = LabeledSlider("Resolution", 50, 500, 150, 1, 0)
 
-        cl.addWidget(self.inputs["l2d"], 1, 0); cl.addWidget(self.inputs["m1"], 1, 1)
-        cl.addWidget(self.inputs["r0"], 2, 0); cl.addWidget(self.inputs["r1"], 2, 1)
-        cl.addWidget(self.inputs["cp"], 3, 0); cl.addWidget(self.inputs["ENVELOPE_RESOLUTION"], 3, 1)
+        cl.addWidget(self.inputs["l2d"], 1, 0)
+        cl.addWidget(self.inputs["m1"], 1, 1)
+        cl.addWidget(self.inputs["r0"], 2, 0)
+        cl.addWidget(self.inputs["r1"], 2, 1)
+        cl.addWidget(self.inputs["cp"], 3, 0)
+        cl.addWidget(self.inputs["ENVELOPE_RESOLUTION"], 3, 1)
         layout.addWidget(self.hull_shape_box)
 
         self.balloon_params_box = QGroupBox("Balloon Geometry Parameters")
         bl = QGridLayout(self.balloon_params_box)
-        self.inputs["GORE_MODEL"] = QComboBox(); self.inputs["GORE_MODEL"].setObjectName("LargeDropdown")
+        self.inputs["GORE_MODEL"] = QComboBox()
+        self.inputs["GORE_MODEL"].setObjectName("LargeDropdown")
         self.inputs["GORE_MODEL"].addItems(["SMOOTH_BUMPY", "PUMPKIN", "OBLATE_LOBED", "FLAT_FACET", "NONE"])
 
         self.inputs["THETA_RES"] = LabeledSlider("Theta Resolution", 50, 1000, 400, 1, 0)
@@ -261,10 +301,15 @@ class AirshipGUI(QMainWindow):
         self.inputs["GORE_AMPLITUDE"] = LabeledSlider("Gore Amplitude", 0, 0.5, 0.05, 0.0001, 4)
         self.inputs["GORE_FADE_POWER"] = LabeledSlider("Gore Fade/Power", 1, 10, 4, 0.0001, 4)
 
-        bl.addWidget(QLabel("Gore Model:"), 0, 0); bl.addWidget(self.inputs["GORE_MODEL"], 0, 1)
-        bl.addWidget(self.inputs["ASPECT_RATIO"], 1, 0); bl.addWidget(self.inputs["GORE_AMPLITUDE"], 1, 1)
-        bl.addWidget(self.inputs["GORE_FADE_POWER"], 2, 0); bl.addWidget(self.inputs["BULGE_AMPLITUDE"], 2, 1)
-        bl.addWidget(self.inputs["BULGE_POWER"], 3, 0); bl.addWidget(self.inputs["THETA_RES"], 4, 0); bl.addWidget(self.inputs["PHI_RES"], 4, 1)
+        bl.addWidget(QLabel("Gore Model:"), 0, 0)
+        bl.addWidget(self.inputs["GORE_MODEL"], 0, 1)
+        bl.addWidget(self.inputs["ASPECT_RATIO"], 1, 0)
+        bl.addWidget(self.inputs["GORE_AMPLITUDE"], 1, 1)
+        bl.addWidget(self.inputs["GORE_FADE_POWER"], 2, 0)
+        bl.addWidget(self.inputs["BULGE_AMPLITUDE"], 2, 1)
+        bl.addWidget(self.inputs["BULGE_POWER"], 3, 0)
+        bl.addWidget(self.inputs["THETA_RES"], 4, 0)
+        bl.addWidget(self.inputs["PHI_RES"], 4, 1)
         layout.addWidget(self.balloon_params_box)
 
         self.length_box = QGroupBox("Standard Mode: Length")
@@ -293,16 +338,19 @@ class AirshipGUI(QMainWindow):
         self.length_box.setHidden(is_vol or is_balloon)
         self.volume_box.setHidden(not (is_vol or is_balloon))
 
-        curr = self.tab_widget.currentIndex(); self.tab_widget.clear()
+        curr = self.tab_widget.currentIndex()
+        self.tab_widget.clear()
         self.tab_widget.addTab(self.primary_input_tab, "Envelope Geometry")
         if is_multi: self.tab_widget.addTab(self.fairings_tab, "Multi-Lobe Configuration")
         if not is_balloon: self.tab_widget.addTab(self.fin_tab, "Fin Design")
-        self.tab_widget.addTab(self.output_tab, "Output")
-        self.tab_widget.setCurrentIndex(min(curr, self.tab_widget.count()-1)); self.tab_widget.blockSignals(False)
+        self.tab_widget.addTab(self.output_tab, "Output & Preview")
+        self.tab_widget.setCurrentIndex(min(curr, self.tab_widget.count()-1))
+        self.tab_widget.blockSignals(False)
         self._update_navigation_buttons()
 
     def setup_fairings_tab(self):
         layout = QVBoxLayout(self.fairings_tab)
+
         self.offset_box = QGroupBox("Lobe Separation Offsets")
         ol = QVBoxLayout(self.offset_box)
         self.inputs["LOBE_OFFSET_X_SLIDER"] = LabeledSlider("X Offset (Longitudinal)", 0, 50, 10, 0.0001, 4)
@@ -343,8 +391,12 @@ class AirshipGUI(QMainWindow):
         self.inputs["FIN_AXIAL_OFFSET"] = LabeledSlider("Axial Offset %", 50.0, 100.0, 80.0, 0.0001, 4)
         self.inputs["FIN_SECTION_RESOLUTION"] = LabeledSlider("Section Resolution", 10, 100, 60, 1, decimals=0)
 
-        fin_dim_layout.addWidget(self.inputs["FIN_RC_LENGTH"], 0, 0); fin_dim_layout.addWidget(self.inputs["FIN_HEIGHT"], 0, 1); fin_dim_layout.addWidget(self.inputs["FIN_THICKNESS"], 0, 2)
-        fin_dim_layout.addWidget(self.inputs["FIN_TAPER_RATIO"], 1, 0); fin_dim_layout.addWidget(self.inputs["FIN_AXIAL_OFFSET"], 1, 1); fin_dim_layout.addWidget(self.inputs["FIN_SECTION_RESOLUTION"], 1, 2)
+        fin_dim_layout.addWidget(self.inputs["FIN_RC_LENGTH"], 0, 0)
+        fin_dim_layout.addWidget(self.inputs["FIN_HEIGHT"], 0, 1)
+        fin_dim_layout.addWidget(self.inputs["FIN_THICKNESS"], 0, 2)
+        fin_dim_layout.addWidget(self.inputs["FIN_TAPER_RATIO"], 1, 0)
+        fin_dim_layout.addWidget(self.inputs["FIN_AXIAL_OFFSET"], 1, 1)
+        fin_dim_layout.addWidget(self.inputs["FIN_SECTION_RESOLUTION"], 1, 2)
         container_layout.addWidget(fin_dim_group)
 
         fin_sweep_group = QGroupBox("Fin Sweep and Configuration")
@@ -353,8 +405,10 @@ class AirshipGUI(QMainWindow):
         self.inputs["FIN_TIP_ANGLE"] = LabeledSlider("Tip Angle (Deg)", 0.0, 30.0, 15.0, 0.0001, 4)
         self.inputs["FIN_NUMBER"] = LabeledSlider("N Fins", 2, 8, 4, 1, decimals=0)
 
-        fin_sweep_layout.addWidget(self.inputs["FIN_SWEEP_ANGLE"], 0, 0); fin_sweep_layout.addWidget(self.inputs["FIN_TIP_ANGLE"], 0, 1)
-        fin_sweep_layout.addWidget(QLabel("Number of Fins:"), 1, 0); fin_sweep_layout.addWidget(self.inputs["FIN_NUMBER"], 1, 1)
+        fin_sweep_layout.addWidget(self.inputs["FIN_SWEEP_ANGLE"], 0, 0)
+        fin_sweep_layout.addWidget(self.inputs["FIN_TIP_ANGLE"], 0, 1)
+        fin_sweep_layout.addWidget(QLabel("Number of Fins:"), 1, 0)
+        fin_sweep_layout.addWidget(self.inputs["FIN_NUMBER"], 1, 1)
         fin_sweep_layout.addWidget(QLabel("Angular Positions:"), 2, 0)
         self.inputs["FIN_THETA_POS_TEXT"] = QLineEdit("0.0, 90.0, 180.0, 270.0")
         fin_sweep_layout.addWidget(self.inputs["FIN_THETA_POS_TEXT"], 2, 1, 1, 2)
@@ -367,9 +421,16 @@ class AirshipGUI(QMainWindow):
         self.fin_container.setEnabled(enabled)
 
     def setup_output_tab(self):
-        layout = QVBoxLayout(self.output_tab)
+        # Use a Horizontal Splitter for 50/50 division
+        self.splitter = QSplitter(Qt.Horizontal)
+
+        # --- LEFT PANEL (Settings, Project Info, and Log) ---
+        left_widget = QWidget()
+        left_layout = QVBoxLayout(left_widget)
+
         self.inputs["FINAL_OBJECT_NAME"] = QLineEdit("Airship_Project")
-        layout.addWidget(QLabel("Project Name:")); layout.addWidget(self.inputs["FINAL_OBJECT_NAME"])
+        left_layout.addWidget(QLabel("Project Name:"))
+        left_layout.addWidget(self.inputs["FINAL_OBJECT_NAME"])
 
         dir_group = QGroupBox("Base Output Directory")
         dir_layout = QHBoxLayout(dir_group)
@@ -377,66 +438,106 @@ class AirshipGUI(QMainWindow):
         self.dir_path_display.setReadOnly(True)
         btn_browse = QPushButton("Browse...")
         btn_browse.clicked.connect(self.browse_output_directory)
-        dir_layout.addWidget(self.dir_path_display); dir_layout.addWidget(btn_browse)
-        layout.addWidget(dir_group)
+        dir_layout.addWidget(self.dir_path_display)
+        dir_layout.addWidget(btn_browse)
+        left_layout.addWidget(dir_group)
 
         self.inputs["N_PETALS"] = LabeledSlider("Gores/Petals", 2, 200, 8, 1, 0)
-        layout.addWidget(self.inputs["N_PETALS"])
+        left_layout.addWidget(self.inputs["N_PETALS"])
 
-        self.format_button_group = QButtonGroup(self); h_lay = QHBoxLayout()
+        self.format_button_group = QButtonGroup(self)
+        h_lay = QHBoxLayout()
         for i, fmt in enumerate([".brep", ".stl", ".step"]):
-            btn = QPushButton(fmt); btn.setCheckable(True); h_lay.addWidget(btn); self.format_button_group.addButton(btn, i); btn.setChecked(i==1)
-        layout.addLayout(h_lay)
+            btn = QPushButton(fmt)
+            btn.setCheckable(True)
+            h_lay.addWidget(btn)
+            self.format_button_group.addButton(btn, i)
+            btn.setChecked(i==1)
+        left_layout.addLayout(h_lay)
 
         btn_lay = QHBoxLayout()
         self.btn_run = QPushButton("RUN GENERATION")
-        self.btn_run.setMinimumHeight(35); self.btn_run.setStyleSheet("background-color: #007ACC; color: white;")
+        self.btn_run.setMinimumHeight(35)
+        self.btn_run.setStyleSheet("background-color: #007ACC; color: white;")
         self.btn_run.clicked.connect(self.run_process)
 
         self.btn_plot = QPushButton("PLOT 2D PETAL")
-        self.btn_plot.setMinimumHeight(35);
+        self.btn_plot.setMinimumHeight(35)
         self.btn_plot.clicked.connect(self.generate_plot)
 
-        btn_lay.addWidget(self.btn_run); btn_lay.addWidget(self.btn_plot); layout.addLayout(btn_lay)
+        btn_lay.addWidget(self.btn_run)
+        btn_lay.addWidget(self.btn_plot)
+        left_layout.addLayout(btn_lay)
 
-        prop_group = QGroupBox("Calculated Geometric Properties")
+        prop_group = QGroupBox("Geometric Properties")
         prop_layout = QGridLayout(prop_group)
         self.prop_outputs = {}
-        labels = ["Volume (m³):", "Surface Area (m²):", "Top Proj. Area (m²):", "Side Proj. Area (m²):"]
+        labels = ["Vol (m³):", "Surf (m²):", "Top (m²):", "Side (m²):"]
         keys = ["vol", "surf", "top_area", "side_area"]
 
         for i, (lbl, key) in enumerate(zip(labels, keys)):
             prop_layout.addWidget(QLabel(lbl), i // 2, (i % 2) * 2)
             self.prop_outputs[key] = QLineEdit("0.0000")
             self.prop_outputs[key].setReadOnly(True)
-            self.prop_outputs[key].setFixedWidth(120)
             self.prop_outputs[key].setStyleSheet("background-color: #2D2D2D; color: #00BFFF; font-weight: bold;")
             prop_layout.addWidget(self.prop_outputs[key], i // 2, (i % 2) * 2 + 1)
+        left_layout.addWidget(prop_group)
 
-        layout.addWidget(prop_group)
+        self.log = QTextEdit("Status: Ready")
+        self.log.setReadOnly(True)
+        self.log.setMaximumHeight(200)
+        left_layout.addWidget(self.log)
 
-        matrix_group = QGroupBox("Added Mass Matrix (Non-Dimensional)")
-        matrix_layout = QVBoxLayout(matrix_group)
-        self.matrix_display = QTextEdit()
-        self.matrix_display.setReadOnly(True)
-        self.matrix_display.setFixedHeight(140)
-        self.matrix_display.setFont(QFont("Monospace", 9))
-        self.matrix_display.setStyleSheet("background-color: #1e1e1e; color: #00FF00;")
-        matrix_layout.addWidget(self.matrix_display)
-        layout.addWidget(matrix_group)
+        # --- RIGHT PANEL (Added Mass Table above 3D Preview) ---
+        right_widget = QWidget()
+        right_layout = QVBoxLayout(right_widget)
 
-        self.log = QTextEdit("Status: Ready"); self.log.setReadOnly(True); layout.addWidget(self.log)
+        # Compact Added Mass Matrix Display using a Table
+        matrix_group = QGroupBox("Added Mass Matrix")
+        matrix_vbox = QVBoxLayout(matrix_group)
 
-    def _update_property_display(self, params):
+        self.matrix_table = QTableWidget(6, 6)
+        self.matrix_table.setHorizontalHeaderLabels(["u", "v", "w", "p", "q", "r"])
+        self.matrix_table.setVerticalHeaderLabels(["X", "Y", "Z", "K", "M", "N"])
+        self.matrix_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.matrix_table.verticalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.matrix_table.setFixedHeight(180) # Adjust height to fit matrix
+        self.matrix_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        matrix_vbox.addWidget(self.matrix_table)
+        right_layout.addWidget(matrix_group)
+
+        # 3D Preview (Geometry Visualizer)
+        preview_group = QGroupBox("3D Model Preview")
+        preview_vbox = QVBoxLayout(preview_group)
+
+        # PyVista Plotter Integration
+        self.plotter = BackgroundPlotter(show=False)
+        self.plotter.set_background("#1e1e1e")
+        preview_vbox.addWidget(self.plotter.interactor)
+        right_layout.addWidget(preview_group)
+
+        # Assemble the splitter
+        self.splitter.addWidget(left_widget)
+        self.splitter.addWidget(right_widget)
+        self.splitter.setStretchFactor(0, 1)
+        self.splitter.setStretchFactor(1, 1)
+
+        main_tab_layout = QVBoxLayout(self.output_tab)
+        main_tab_layout.addWidget(self.splitter)
+
+    def _update_3d_view(self, stl_path):
+        """Refreshes the 3D model in the plotter interactor."""
+        if not os.path.exists(stl_path):
+            self.plotter.clear()
+            return
         try:
-            geom = AirshipGeometry(params, self.salome_path)
-            vol, surf, top, side = geom.geometric_properties()
-            self.prop_outputs["vol"].setText(f"{vol:.4f}")
-            self.prop_outputs["surf"].setText(f"{surf:.4f}")
-            self.prop_outputs["top_area"].setText(f"{top:.4f}")
-            self.prop_outputs["side_area"].setText(f"{side:.4f}")
+            self.plotter.clear()
+            mesh = pv.read(stl_path)
+            self.plotter.add_mesh(mesh, color="#00BFFF", show_edges=True, edge_color="#333333", opacity=0.8)
+            self.plotter.view_isometric()
+            self.plotter.reset_camera()
         except Exception as e:
-            print(f"Property Calculation Note: {e}")
+            print(f"[ERROR] 3D View failed: {e}")
 
     def browse_output_directory(self):
         selected_dir = QFileDialog.getExistingDirectory(self, "Select Base Output Directory", self.base_output_directory)
@@ -448,6 +549,7 @@ class AirshipGUI(QMainWindow):
     def create_new_output_folder(self):
         if not os.path.exists(self.base_output_directory):
             os.makedirs(self.base_output_directory)
+
         existing_items = os.listdir(self.base_output_directory)
         indices = []
         for item in existing_items:
@@ -455,6 +557,7 @@ class AirshipGUI(QMainWindow):
                 match = re.match(r"Output_(\d+)", item)
                 if match:
                     indices.append(int(match.group(1)))
+
         next_idx = max(indices) + 1 if indices else 1
         new_folder = os.path.join(self.base_output_directory, f"Output_{next_idx}")
         os.makedirs(new_folder)
@@ -480,6 +583,7 @@ class AirshipGUI(QMainWindow):
         p["LOBE_OFFSET_Z"] = self.inputs["LOBE_OFFSET_Z_SLIDER"].get_value()
         p["MULTI_LOBE_OFFSET_FACTOR"] = 0
         p["SHEET_LENGTH_RATIO"] = self.inputs["SHEET_LENGTH_RATIO_SLIDER"].get_value()
+
         lobe_id = self.lobe_button_group.checkedId()
         p["LOBE_NUMBER"] = lobe_id if lobe_id != -1 else 1
         p["ENVELOPE_PARAMS"] = (p.get("m1", 0.419), p.get("r0", 0.337), p.get("r1", 0.251), p.get("cp", 0.651), p.get("l2d", 3.266))
@@ -498,21 +602,34 @@ class AirshipGUI(QMainWindow):
 
         is_vol = self.mode_button_group.checkedId() == 2
         hull_len = p.get("ENVELOPE_LENGTH", 100.0)
+
         if is_vol:
             try:
                 from geometry_handler import GertlerEnvelope
-                temp_env = GertlerEnvelope.from_parameters_volume(p["ENVELOPE_PARAMS"], self.inputs["VOLUME"].get_value(), int(p["ENVELOPE_RESOLUTION"]), p["LOBE_NUMBER"], p["LOBE_OFFSET_X"], p["LOBE_OFFSET_Y"], p["LOBE_OFFSET_Z"])
+                temp_env = GertlerEnvelope.from_parameters_volume(
+                    p["ENVELOPE_PARAMS"],
+                    self.inputs["VOLUME"].get_value(),
+                    int(p["ENVELOPE_RESOLUTION"]),
+                    p["LOBE_NUMBER"],
+                    p["LOBE_OFFSET_X"],
+                    p["LOBE_OFFSET_Y"],
+                    p["LOBE_OFFSET_Z"]
+                )
                 hull_len = temp_env.length
                 p["ENVELOPE_LENGTH"] = hull_len
-            except: hull_len = 100.0
+            except:
+                hull_len = 100.0
 
         req_le = (p.get("FIN_AXIAL_OFFSET", 80) / 100.0) * hull_len
         max_le = hull_len - p.get("FIN_RC_LENGTH", 15) - 0.5
         p["FIN_AXIAL_OFFSET"] = min(req_le, max_le)
+
         theta_text = self.inputs["FIN_THETA_POS_TEXT"].text()
         try:
             p["FIN_THETA_POS"] = [float(a.strip()) for a in theta_text.split(',') if a.strip()]
-        except ValueError: return None
+        except ValueError:
+            return None
+
         p["OUTPUT_DIRECTORY"] = target_dir
         return p
 
@@ -550,20 +667,23 @@ class AirshipGUI(QMainWindow):
 
         self.thread.start()
 
-    def on_worker_finished(self, matrix):
+    def on_worker_finished(self, result):
+        matrix, stl_path = result
         self.btn_run.setEnabled(True)
         self.btn_run.setText("RUN GENERATION")
+
+        # Immediate 3D Render
+        self._update_3d_view(stl_path)
+
         if matrix is not None:
-            # Formatting with exact 4 decimal places alignment
-            formatted_matrix = np.array2string(
-                matrix,
-                precision=4,
-                suppress_small=True,
-                separator=', ',
-                formatter={'float_kind': lambda x: f"{x:8.4f}"}
-            )
-            self.matrix_display.setPlainText(formatted_matrix)
+            # Populate the Added Mass Table
+            for r in range(6):
+                for c in range(6):
+                    item = QTableWidgetItem(f"{matrix[r, c]:.4f}")
+                    item.setTextAlignment(Qt.AlignCenter)
+                    self.matrix_table.setItem(r, c, item)
             self.log.append("[SUCCESS] Added Mass calculation complete.")
+
         self.log.append("[GUI] Process successfully completed.")
 
     def on_worker_error(self, error_msg):
@@ -577,12 +697,22 @@ class AirshipGUI(QMainWindow):
         if p is None: return
         try:
             dat_file = os.path.join(target_dir, f"{p['FINAL_OBJECT_NAME']}.dat")
-            msg = plot_and_save_profile(p["ENVELOPE_PARAMS"], p["ENVELOPE_LENGTH"], int(p["ENVELOPE_RESOLUTION"]), int(p["N_PETALS"]), int(p["ENVELOPE_RESOLUTION"]), dat_file, p["FINAL_OBJECT_NAME"])
+            msg = plot_and_save_profile(
+                p["ENVELOPE_PARAMS"],
+                p["ENVELOPE_LENGTH"],
+                int(p["ENVELOPE_RESOLUTION"]),
+                int(p["N_PETALS"]),
+                int(p["ENVELOPE_RESOLUTION"]),
+                dat_file,
+                p["FINAL_OBJECT_NAME"]
+            )
             print(f"[GUI] Plotting results: {msg}")
         except Exception as e:
             print(f"Plot Error: {e}")
 
-    def load_defaults(self): self.load_preset(0)
+    def load_defaults(self):
+        self.load_preset(0)
+
     def load_preset(self, idx):
         vals = STANDARD_ENVELOPES[self.preset_combo.itemText(idx)]
         for k, v in zip(["m1", "r0", "r1", "cp", "l2d"], vals):
@@ -601,25 +731,31 @@ class AirshipGUI(QMainWindow):
     def setup_navigation_buttons(self):
         nav = QWidget()
         lay = QHBoxLayout(nav)
+
         self.btn_back = QPushButton("<< PREV")
         self.btn_back.setMinimumHeight(35)
         self.btn_back.setFixedWidth(100)
+
         self.btn_next = QPushButton("NEXT >>")
         self.btn_next.setMinimumHeight(35)
         self.btn_next.setFixedWidth(100)
         self.btn_next.setStyleSheet("background-color: #00BFFF; color: black; font-weight: bold;")
+
         self.btn_back.clicked.connect(lambda: self.tab_widget.setCurrentIndex(self.tab_widget.currentIndex()-1))
         self.btn_next.clicked.connect(lambda: self.tab_widget.setCurrentIndex(self.tab_widget.currentIndex()+1))
+
         self.btn_reset = QPushButton("RESET")
         self.btn_reset.setMinimumHeight(35)
         self.btn_reset.setFixedWidth(80)
         self.btn_reset.setStyleSheet("background-color: #555555; color: white; font-weight: bold;")
         self.btn_reset.clicked.connect(self.reset_to_defaults)
+
         self.btn_exit = QPushButton("EXIT")
         self.btn_exit.setMinimumHeight(35)
         self.btn_exit.setFixedWidth(80)
         self.btn_exit.setStyleSheet("background-color: #D32F2F; color: white; font-weight: bold;")
         self.btn_exit.clicked.connect(self.close)
+
         lay.addWidget(self.btn_back)
         lay.addWidget(self.btn_next)
         lay.addStretch()
