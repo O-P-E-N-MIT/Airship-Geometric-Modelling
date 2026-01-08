@@ -41,6 +41,9 @@ The Airship Geometry Generator is an open-source Python-based framework designed
     - scipy
     - PySide6
     - shapely
+    - pymeshlab
+    - pyvista
+    - pyvistaqt
 
 ### Installation
 
