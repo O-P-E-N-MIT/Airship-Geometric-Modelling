@@ -10,5 +10,6 @@ unstable/
 *.iges
 *.step
 *.stp
+*.tex
 
 test.py
