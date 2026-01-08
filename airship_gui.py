@@ -5,40 +5,80 @@ import numpy as np
 import io
 
 from PySide6.QtGui import QFont, QDoubleValidator
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, Signal, QThread, QObject
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QTabWidget, QVBoxLayout,
     QHBoxLayout, QGridLayout, QLabel, QLineEdit, QPushButton,
     QComboBox, QSlider, QGroupBox, QFileDialog, QTextEdit,
-    QButtonGroup, QCheckBox
+    QButtonGroup, QCheckBox, QMessageBox
 )
 
 from geometry import AirshipGeometry, plot_and_save_profile
 from geometry_handler import STANDARD_ENVELOPES
-# NEW: Import balloon geometry function
+# Integration of balloon.py
 from balloon import create_balloon_geometry
 
-# --- NEW HELPER CLASS FOR LOGGING ---
+# --- THREAD-SAFE LOGGING SYSTEM ---
 
-class StatusLogger(io.StringIO):
-    """Redirects python 'print' statements to a QTextEdit widget in real-time."""
-    def __init__(self, log_widget):
-        super().__init__()
-        self.log_widget = log_widget
+class StatusLogger(QObject):
+    """
+    Redirects python 'print' statements to a Signal.
+    Allows print() calls from external files to show up in the
+    GUI QTextEdit without causing cross-thread memory corruption.
+    """
+    message_logged = Signal(str)
 
     def write(self, s):
         if s.strip():
-            # Append the message to the QTextEdit
-            self.log_widget.append(s.strip())
-        # Ensure the UI updates immediately
-        QApplication.processEvents()
-        super().write(s)
+            self.message_logged.emit(s.strip())
 
-# --- EXISTING CLASSES ---
+    def flush(self):
+        pass
+
+# --- WORKER OBJECT FOR CALCULATIONS ---
+
+class GenerationWorker(QObject):
+    """Handles the heavy generation logic in a background thread."""
+    finished = Signal(object)
+    error = Signal(str)
+
+    def __init__(self, mode_id, params, volume_val, gore_model):
+        super().__init__()
+        self.mode_id = mode_id
+        self.params = params
+        self.volume_val = volume_val
+        self.gore_model = gore_model
+
+    def run(self):
+        try:
+            if self.mode_id == 3: # BALLOON MODE
+                print(f"[PROCESS] Starting Superpressure Balloon generation...")
+                output_path = os.path.join(self.params['OUTPUT_DIRECTORY'], f"{self.params['FINAL_OBJECT_NAME']}.stl")
+                create_balloon_geometry(
+                    gore_model=self.gore_model,
+                    target_volume=self.volume_val,
+                    gores=int(self.params['N_PETALS']),
+                    params=self.params['balloon_params'],
+                    theta_resolution=int(self.params.get("THETA_RES", 400)),
+                    phi_resolution=int(self.params.get("PHI_RES", 600)),
+                    output_file=output_path,
+                    single_gore=False
+                )
+                print(f"[SUCCESS] Balloon STL generated at: {output_path}")
+                self.finished.emit(None)
+            else: # AIRSHIP MODES
+                print(f"[PROCESS] Launching Salome subprocess for {self.params['EXPORT_FORMAT']} export...")
+                g = AirshipGeometry(self.params, self.params['SALOME_PATH'])
+                process, matrix = g.run_salome(self.params['EXPORT_FORMAT'])
+                self.finished.emit(matrix)
+        except Exception as e:
+            self.error.emit(str(e))
+
+# --- UI COMPONENTS ---
 
 class LabeledSlider (QGroupBox):
     value_changed_by_user = Signal(float)
-    def __init__(self, label, min_val, max_val, default_val, step, decimals=3, parent=None):
+    def __init__(self, label, min_val, max_val, default_val, step, decimals=4, parent=None):
         super().__init__(label, parent)
         self.decimals, self.step = decimals, step
         self.min_val, self.max_val = min_val, max_val
@@ -50,7 +90,7 @@ class LabeledSlider (QGroupBox):
         self.slider.setValue(int((default_val - min_val) / step))
 
         self.value_editor = QLineEdit()
-        self.value_editor.setFixedWidth(70)
+        self.value_editor.setFixedWidth(85)
         self.value_editor.setFont(QFont("Monospace", 9))
         self.value_editor.setValidator(QDoubleValidator(min_val, max_val, decimals))
 
@@ -85,7 +125,7 @@ class LabeledSlider (QGroupBox):
 class AirshipGUI(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Airship & Balloon Geometry Generator | Salome Interface")
+        self.setWindowTitle("Airship Geometry Generator | Salome Interface")
         self.setGeometry(100, 100, 1200, 900)
 
         self.salome_path = r"C:\SALOME-9.15.0\run_SALOME.bat"
@@ -121,10 +161,17 @@ class AirshipGUI(QMainWindow):
         self.refresh_tabs()
         self.load_defaults()
 
+        # START LOG REDIRECTION
+        self.status_logger = StatusLogger()
+        self.status_logger.message_logged.connect(self._append_to_log)
+        sys.stdout = self.status_logger
+
+    def _append_to_log(self, text):
+        self.log.append(text)
+
     def _init_persistent_controls(self):
         self.mode_button_group = QButtonGroup(self)
         self.mode_btns = []
-        # Added third mode for SUPER PRESSURE BALLOON
         for i, name in enumerate(["STANDARD MODE", "VOLUMETRIC MODE", "SUPER PRESSURE BALLOON"], 1):
             btn = QPushButton(name); btn.setCheckable(True); btn.setMinimumHeight(40)
             btn.setFont(QFont("Arial", 10, QFont.Bold))
@@ -146,10 +193,10 @@ class AirshipGUI(QMainWindow):
         h_layout = QVBoxLayout(self.header_widget); h_layout.setContentsMargins(0, 0, 0, 0)
         m_grp = QGroupBox("Dimensioning Mode"); m_lay = QHBoxLayout(m_grp)
         for btn in self.mode_btns: m_lay.addWidget(btn)
-        self.lobe_grp_box = QGroupBox("Hull Configuration")
-        l_lay = QHBoxLayout(self.lobe_grp_box)
+        self.hull_config_group = QGroupBox("Hull Configuration")
+        l_lay = QHBoxLayout(self.hull_config_group)
         for btn in self.lobe_btns: l_lay.addWidget(btn)
-        h_layout.addWidget(m_grp); h_layout.addWidget(self.lobe_grp_box)
+        h_layout.addWidget(m_grp); h_layout.addWidget(self.hull_config_group)
 
     def setup_style(self):
         self.setStyleSheet("""
@@ -182,7 +229,6 @@ class AirshipGUI(QMainWindow):
     def setup_primary_tab_layout(self):
         layout = QVBoxLayout(self.primary_input_tab); layout.addWidget(self.header_widget)
 
-        # --- Airship Hull Envelope Shape Group ---
         self.hull_shape_box = QGroupBox("Hull Envelope Shape")
         cl = QGridLayout(self.hull_shape_box)
         self.preset_combo = QComboBox(); self.preset_combo.setObjectName("LargeDropdown")
@@ -190,11 +236,11 @@ class AirshipGUI(QMainWindow):
         self.preset_combo.currentIndexChanged.connect(self.load_preset)
         cl.addWidget(QLabel("Shape Preset:"), 0, 0); cl.addWidget(self.preset_combo, 0, 1, 1, 2)
 
-        self.inputs["l2d"] = LabeledSlider("L/D Ratio", 1, 8, 3.266, 0.001)
-        self.inputs["m1"] = LabeledSlider("m1", 0.3, 0.6, 0.419, 0.001)
-        self.inputs["r0"] = LabeledSlider("r0", 0.01, 1, 0.337, 0.001)
-        self.inputs["r1"] = LabeledSlider("r1", 0.01, 1, 0.251, 0.001)
-        self.inputs["cp"] = LabeledSlider("cp", 0.5, 0.8, 0.651, 0.001)
+        self.inputs["l2d"] = LabeledSlider("L/D Ratio", 1, 8, 3.266, 0.0001, 4)
+        self.inputs["m1"] = LabeledSlider("m1", 0.3, 0.6, 0.419, 0.0001, 4)
+        self.inputs["r0"] = LabeledSlider("r0", 0.01, 1, 0.337, 0.0001, 4)
+        self.inputs["r1"] = LabeledSlider("r1", 0.01, 1, 0.251, 0.0001, 4)
+        self.inputs["cp"] = LabeledSlider("cp", 0.5, 0.8, 0.651, 0.0001, 4)
         self.inputs["ENVELOPE_RESOLUTION"] = LabeledSlider("Resolution", 50, 500, 150, 1, 0)
 
         cl.addWidget(self.inputs["l2d"], 1, 0); cl.addWidget(self.inputs["m1"], 1, 1)
@@ -202,30 +248,36 @@ class AirshipGUI(QMainWindow):
         cl.addWidget(self.inputs["cp"], 3, 0); cl.addWidget(self.inputs["ENVELOPE_RESOLUTION"], 3, 1)
         layout.addWidget(self.hull_shape_box)
 
-        # --- Balloon Parameters Group ---
         self.balloon_params_box = QGroupBox("Balloon Geometry Parameters")
         bl = QGridLayout(self.balloon_params_box)
-
         self.inputs["GORE_MODEL"] = QComboBox(); self.inputs["GORE_MODEL"].setObjectName("LargeDropdown")
         self.inputs["GORE_MODEL"].addItems(["SMOOTH_BUMPY", "PUMPKIN", "OBLATE_LOBED", "FLAT_FACET", "NONE"])
 
         self.inputs["THETA_RES"] = LabeledSlider("Theta Resolution", 50, 1000, 400, 1, 0)
         self.inputs["PHI_RES"] = LabeledSlider("Phi Resolution", 50, 1000, 600, 1, 0)
-        self.inputs["ASPECT_RATIO"] = LabeledSlider("Aspect Ratio", 0.1, 5.0, 1.0, 0.01)
-        self.inputs["BULGE_AMPLITUDE"] = LabeledSlider("Bulge Amplitude", 0, 1.0, 0.0, 0.001)
-        self.inputs["BULGE_POWER"] = LabeledSlider("Bulge Power", 1, 10, 1, 0.1)
-        self.inputs["GORE_AMPLITUDE"] = LabeledSlider("Gore Amplitude", 0, 0.5, 0.05, 0.001)
-        self.inputs["GORE_FADE_POWER"] = LabeledSlider("Gore Fade/Power", 1, 10, 4, 0.1)
+        self.inputs["ASPECT_RATIO"] = LabeledSlider("Aspect Ratio", 0.1, 5.0, 1.0, 0.0001, 4)
+        self.inputs["BULGE_AMPLITUDE"] = LabeledSlider("Bulge Amplitude", 0, 1.0, 0.0, 0.0001, 4)
+        self.inputs["BULGE_POWER"] = LabeledSlider("Bulge Power", 1, 10, 1, 0.0001, 4)
+        self.inputs["GORE_AMPLITUDE"] = LabeledSlider("Gore Amplitude", 0, 0.5, 0.05, 0.0001, 4)
+        self.inputs["GORE_FADE_POWER"] = LabeledSlider("Gore Fade/Power", 1, 10, 4, 0.0001, 4)
 
         bl.addWidget(QLabel("Gore Model:"), 0, 0); bl.addWidget(self.inputs["GORE_MODEL"], 0, 1)
         bl.addWidget(self.inputs["ASPECT_RATIO"], 1, 0); bl.addWidget(self.inputs["GORE_AMPLITUDE"], 1, 1)
         bl.addWidget(self.inputs["GORE_FADE_POWER"], 2, 0); bl.addWidget(self.inputs["BULGE_AMPLITUDE"], 2, 1)
-        bl.addWidget(self.inputs["BULGE_POWER"], 3, 0); bl.addWidget(self.inputs["THETA_RES"], 4, 0)
-        bl.addWidget(self.inputs["PHI_RES"], 4, 1)
+        bl.addWidget(self.inputs["BULGE_POWER"], 3, 0); bl.addWidget(self.inputs["THETA_RES"], 4, 0); bl.addWidget(self.inputs["PHI_RES"], 4, 1)
         layout.addWidget(self.balloon_params_box)
 
-        self.length_box = QGroupBox("Standard Mode: Length"); ll = QVBoxLayout(self.length_box); self.inputs["ENVELOPE_LENGTH"] = LabeledSlider("Length (L)", 10, 500, 100, 1, 1); ll.addWidget(self.inputs["ENVELOPE_LENGTH"]); layout.addWidget(self.length_box)
-        self.volume_box = QGroupBox("Volumetric Mode: Volume"); vl = QVBoxLayout(self.volume_box); self.inputs["VOLUME"] = LabeledSlider("Volume (m³)", 100, 1000000, 5000, 10, 1); vl.addWidget(self.inputs["VOLUME"]); layout.addWidget(self.volume_box)
+        self.length_box = QGroupBox("Standard Mode: Length")
+        ll = QVBoxLayout(self.length_box)
+        self.inputs["ENVELOPE_LENGTH"] = LabeledSlider("Length (L)", 10, 500, 100, 0.0001, 4)
+        ll.addWidget(self.inputs["ENVELOPE_LENGTH"])
+        layout.addWidget(self.length_box)
+
+        self.volume_box = QGroupBox("Volumetric Mode: Volume")
+        vl = QVBoxLayout(self.volume_box)
+        self.inputs["VOLUME"] = LabeledSlider("Volume (m³)", 100, 1000000, 5000, 0.1, 4)
+        vl.addWidget(self.inputs["VOLUME"])
+        layout.addWidget(self.volume_box)
         layout.addStretch()
 
     def refresh_tabs(self):
@@ -237,7 +289,7 @@ class AirshipGUI(QMainWindow):
 
         self.hull_shape_box.setHidden(is_balloon)
         self.balloon_params_box.setHidden(not is_balloon)
-        self.lobe_grp_box.setHidden(is_balloon)
+        self.hull_config_group.setHidden(is_balloon)
         self.length_box.setHidden(is_vol or is_balloon)
         self.volume_box.setHidden(not (is_vol or is_balloon))
 
@@ -253,9 +305,9 @@ class AirshipGUI(QMainWindow):
         layout = QVBoxLayout(self.fairings_tab)
         self.offset_box = QGroupBox("Lobe Separation Offsets")
         ol = QVBoxLayout(self.offset_box)
-        self.inputs["LOBE_OFFSET_X_SLIDER"] = LabeledSlider("X Offset (Longitudinal)", 0, 50, 10, 0.1, 1)
-        self.inputs["LOBE_OFFSET_Y_SLIDER"] = LabeledSlider("Y Offset (Lateral)", 0, 50, 10, 0.1, 1)
-        self.inputs["LOBE_OFFSET_Z_SLIDER"] = LabeledSlider("Z Offset (Vertical)", 0, 50, 10, 0.1, 1)
+        self.inputs["LOBE_OFFSET_X_SLIDER"] = LabeledSlider("X Offset (Longitudinal)", 0, 50, 10, 0.0001, 4)
+        self.inputs["LOBE_OFFSET_Y_SLIDER"] = LabeledSlider("Y Offset (Lateral)", 0, 50, 10, 0.0001, 4)
+        self.inputs["LOBE_OFFSET_Z_SLIDER"] = LabeledSlider("Z Offset (Vertical)", 0, 50, 10, 0.0001, 4)
         ol.addWidget(self.inputs["LOBE_OFFSET_X_SLIDER"])
         ol.addWidget(self.inputs["LOBE_OFFSET_Y_SLIDER"])
         ol.addWidget(self.inputs["LOBE_OFFSET_Z_SLIDER"])
@@ -263,7 +315,7 @@ class AirshipGUI(QMainWindow):
 
         sheet_grp = QGroupBox("Fairing Geometry")
         sl = QVBoxLayout(sheet_grp)
-        self.inputs["SHEET_LENGTH_RATIO_SLIDER"] = LabeledSlider("Sheet Length Ratio (0-1)", 0, 1, 0.5, 0.01, 2)
+        self.inputs["SHEET_LENGTH_RATIO_SLIDER"] = LabeledSlider("Sheet Length Ratio (0-1)", 0, 1, 0.5, 0.0001, 4)
         sl.addWidget(self.inputs["SHEET_LENGTH_RATIO_SLIDER"])
         layout.addWidget(sheet_grp)
         layout.addStretch()
@@ -284,11 +336,11 @@ class AirshipGUI(QMainWindow):
 
         fin_dim_group = QGroupBox("Fin Dimensions")
         fin_dim_layout = QGridLayout(fin_dim_group)
-        self.inputs["FIN_RC_LENGTH"] = LabeledSlider("Root Chord Length", 5.0, 50.0, 15.5, 0.1, 1)
-        self.inputs["FIN_HEIGHT"] = LabeledSlider("Fin Height (Span)", 5.0, 50.0, 15.5, 0.1, 1)
-        self.inputs["FIN_THICKNESS"] = LabeledSlider("Thickness (% of RC)", 1.0, 20.0, 10.0, 0.1, 1)
-        self.inputs["FIN_TAPER_RATIO"] = LabeledSlider("Taper Ratio (Tip/Root)", 0.1, 1.0, 0.55, 0.01, 2)
-        self.inputs["FIN_AXIAL_OFFSET"] = LabeledSlider("Axial Offset (% Length)", 50.0, 100.0, 80.0, 0.1, 1)
+        self.inputs["FIN_RC_LENGTH"] = LabeledSlider("Root Chord Length", 5.0, 50.0, 15.5, 0.0001, 4)
+        self.inputs["FIN_HEIGHT"] = LabeledSlider("Fin Height (Span)", 5.0, 50.0, 15.5, 0.0001, 4)
+        self.inputs["FIN_THICKNESS"] = LabeledSlider("Thickness %", 1.0, 20.0, 10.0, 0.0001, 4)
+        self.inputs["FIN_TAPER_RATIO"] = LabeledSlider("Taper Ratio", 0.1, 1.0, 0.55, 0.0001, 4)
+        self.inputs["FIN_AXIAL_OFFSET"] = LabeledSlider("Axial Offset %", 50.0, 100.0, 80.0, 0.0001, 4)
         self.inputs["FIN_SECTION_RESOLUTION"] = LabeledSlider("Section Resolution", 10, 100, 60, 1, decimals=0)
 
         fin_dim_layout.addWidget(self.inputs["FIN_RC_LENGTH"], 0, 0); fin_dim_layout.addWidget(self.inputs["FIN_HEIGHT"], 0, 1); fin_dim_layout.addWidget(self.inputs["FIN_THICKNESS"], 0, 2)
@@ -297,13 +349,13 @@ class AirshipGUI(QMainWindow):
 
         fin_sweep_group = QGroupBox("Fin Sweep and Configuration")
         fin_sweep_layout = QGridLayout(fin_sweep_group)
-        self.inputs["FIN_SWEEP_ANGLE"] = LabeledSlider("Sweep Angle (Deg)", 0.0, 45.0, 0.0, 0.1, 1)
-        self.inputs["FIN_TIP_ANGLE"] = LabeledSlider("Tip Angle (Deg)", 0.0, 30.0, 15.0, 0.1, 1)
+        self.inputs["FIN_SWEEP_ANGLE"] = LabeledSlider("Sweep Angle (Deg)", 0.0, 45.0, 0.0, 0.0001, 4)
+        self.inputs["FIN_TIP_ANGLE"] = LabeledSlider("Tip Angle (Deg)", 0.0, 30.0, 15.0, 0.0001, 4)
         self.inputs["FIN_NUMBER"] = LabeledSlider("N Fins", 2, 8, 4, 1, decimals=0)
 
         fin_sweep_layout.addWidget(self.inputs["FIN_SWEEP_ANGLE"], 0, 0); fin_sweep_layout.addWidget(self.inputs["FIN_TIP_ANGLE"], 0, 1)
         fin_sweep_layout.addWidget(QLabel("Number of Fins:"), 1, 0); fin_sweep_layout.addWidget(self.inputs["FIN_NUMBER"], 1, 1)
-        fin_sweep_layout.addWidget(QLabel("Angular Positions (Comma Separated):"), 2, 0)
+        fin_sweep_layout.addWidget(QLabel("Angular Positions:"), 2, 0)
         self.inputs["FIN_THETA_POS_TEXT"] = QLineEdit("0.0, 90.0, 180.0, 270.0")
         fin_sweep_layout.addWidget(self.inputs["FIN_THETA_POS_TEXT"], 2, 1, 1, 2)
         container_layout.addWidget(fin_sweep_group)
@@ -355,7 +407,7 @@ class AirshipGUI(QMainWindow):
 
         for i, (lbl, key) in enumerate(zip(labels, keys)):
             prop_layout.addWidget(QLabel(lbl), i // 2, (i % 2) * 2)
-            self.prop_outputs[key] = QLineEdit("0.000")
+            self.prop_outputs[key] = QLineEdit("0.0000")
             self.prop_outputs[key].setReadOnly(True)
             self.prop_outputs[key].setFixedWidth(120)
             self.prop_outputs[key].setStyleSheet("background-color: #2D2D2D; color: #00BFFF; font-weight: bold;")
@@ -377,13 +429,12 @@ class AirshipGUI(QMainWindow):
 
     def _update_property_display(self, params):
         try:
-            print("[GUI] Recalculating geometric properties...")
             geom = AirshipGeometry(params, self.salome_path)
             vol, surf, top, side = geom.geometric_properties()
-            self.prop_outputs["vol"].setText(f"{vol:.3f}")
-            self.prop_outputs["surf"].setText(f"{surf:.3f}")
-            self.prop_outputs["top_area"].setText(f"{top:.3f}")
-            self.prop_outputs["side_area"].setText(f"{side:.3f}")
+            self.prop_outputs["vol"].setText(f"{vol:.4f}")
+            self.prop_outputs["surf"].setText(f"{surf:.4f}")
+            self.prop_outputs["top_area"].setText(f"{top:.4f}")
+            self.prop_outputs["side_area"].setText(f"{side:.4f}")
         except Exception as e:
             print(f"Property Calculation Note: {e}")
 
@@ -417,10 +468,10 @@ class AirshipGUI(QMainWindow):
                        "FIN_TAPER_RATIO", "FIN_SWEEP_ANGLE", "FIN_TIP_ANGLE", "FIN_NUMBER",
                        "FIN_SECTION_RESOLUTION"]
 
-        balloon_keys = ["THETA_RES", "PHI_RES", "ASPECT_RATIO", "BULGE_AMPLITUDE",
-                        "BULGE_POWER", "GORE_AMPLITUDE", "GORE_FADE_POWER"]
+        balloon_slider_keys = ["THETA_RES", "PHI_RES", "ASPECT_RATIO", "BULGE_AMPLITUDE",
+                               "BULGE_POWER", "GORE_AMPLITUDE", "GORE_FADE_POWER"]
 
-        for key in (slider_keys + balloon_keys):
+        for key in (slider_keys + balloon_slider_keys):
             if key in self.inputs: p[key] = self.inputs[key].get_value()
 
         p["N_PETALS"] = self.inputs["N_PETALS"].get_value()
@@ -431,7 +482,7 @@ class AirshipGUI(QMainWindow):
         p["SHEET_LENGTH_RATIO"] = self.inputs["SHEET_LENGTH_RATIO_SLIDER"].get_value()
         lobe_id = self.lobe_button_group.checkedId()
         p["LOBE_NUMBER"] = lobe_id if lobe_id != -1 else 1
-        p["ENVELOPE_PARAMS"] = (p.get("m1", 0), p.get("r0", 0), p.get("r1", 0), p.get("cp", 0), p.get("l2d", 0))
+        p["ENVELOPE_PARAMS"] = (p.get("m1", 0.419), p.get("r0", 0.337), p.get("r1", 0.251), p.get("cp", 0.651), p.get("l2d", 3.266))
         p["FINAL_OBJECT_NAME"] = self.inputs["FINAL_OBJECT_NAME"].text()
         p["type"] = self.preset_combo.currentText().split(" ")[0]
         p["INCLUDE_FINS"] = self.inputs["INCLUDE_FINS"].isChecked()
@@ -454,6 +505,7 @@ class AirshipGUI(QMainWindow):
                 hull_len = temp_env.length
                 p["ENVELOPE_LENGTH"] = hull_len
             except: hull_len = 100.0
+
         req_le = (p.get("FIN_AXIAL_OFFSET", 80) / 100.0) * hull_len
         max_le = hull_len - p.get("FIN_RC_LENGTH", 15) - 0.5
         p["FIN_AXIAL_OFFSET"] = min(req_le, max_le)
@@ -465,60 +517,65 @@ class AirshipGUI(QMainWindow):
         return p
 
     def run_process(self):
-        if AirshipGeometry is None: return
         target_dir = self.create_new_output_folder()
         p = self.get_parameters(target_dir)
         if p is None: return
 
-        old_stdout = sys.stdout
-        sys.stdout = StatusLogger(self.log)
+        fmt_idx = self.format_button_group.checkedId()
+        p['EXPORT_FORMAT'] = ["BREP", "STL", "STEP"][fmt_idx]
+        p['SALOME_PATH'] = self.salome_path
 
-        try:
-            mode_id = self.mode_button_group.checkedId()
-            if mode_id == 3: # BALLOON MODE
-                print(f"\n[GUI] Starting Superpressure Balloon generation...")
-                output_path = os.path.join(target_dir, f"{p['FINAL_OBJECT_NAME']}.stl")
-                create_balloon_geometry(
-                    gore_model=self.inputs["GORE_MODEL"].currentText(),
-                    target_volume=self.inputs["VOLUME"].get_value(),
-                    gores=int(p["N_PETALS"]),
-                    params=p["balloon_params"],
-                    theta_resolution=int(p.get("THETA_RES", 400)),
-                    phi_resolution=int(p.get("PHI_RES", 600)),
-                    output_file=output_path,
-                    single_gore=False # Always False for full geometry
-                )
-                print(f"[SUCCESS] Balloon STL generated at: {output_path}")
-            else: # ORIGINAL AIRSHIP LOGIC
-                print(f"\n[GUI] Starting project generation in: {target_dir}")
-                self._update_property_display(p)
-                fmt_idx = self.format_button_group.checkedId()
-                fmt_name = ["BREP", "STL", "STEP"][fmt_idx]
+        # UI FEEDBACK
+        self.btn_run.setEnabled(False)
+        self.btn_run.setText("PROCESSING...")
+        self.log.append("\n[GUI] Starting generation process...")
 
-                print(f"[GUI] Launching Salome subprocess for {fmt_name} export...")
-                g = AirshipGeometry(p, self.salome_path)
-                process, matrix = g.run_salome(fmt_name)
+        # START THREAD
+        self.thread = QThread()
+        self.worker = GenerationWorker(
+            self.mode_button_group.checkedId(),
+            p,
+            self.inputs["VOLUME"].get_value(),
+            self.inputs["GORE_MODEL"].currentText()
+        )
+        self.worker.moveToThread(self.thread)
 
-                if matrix is not None:
-                    formatted_matrix = np.array2string(matrix, precision=4, suppress_small=True)
-                    self.matrix_display.setPlainText(formatted_matrix)
-                    print("[GUI] Added Mass calculation complete.")
-                else:
-                    self.matrix_display.setPlainText("Matrix computation skipped or failed.")
+        self.thread.started.connect(self.worker.run)
+        self.worker.error.connect(self.on_worker_error)
+        self.worker.finished.connect(self.on_worker_finished)
 
-                self.btn_plot.setEnabled(True)
-                print(f"[SUCCESS] Final objects exported to: {target_dir}")
-        except Exception as e:
-            print(f"[ERROR] {str(e)}")
-        finally:
-            sys.stdout = old_stdout
+        self.worker.finished.connect(self.thread.quit)
+        self.worker.finished.connect(self.worker.deleteLater)
+        self.thread.finished.connect(self.thread.deleteLater)
+
+        self.thread.start()
+
+    def on_worker_finished(self, matrix):
+        self.btn_run.setEnabled(True)
+        self.btn_run.setText("RUN GENERATION")
+        if matrix is not None:
+            # Formatting with exact 4 decimal places alignment
+            formatted_matrix = np.array2string(
+                matrix,
+                precision=4,
+                suppress_small=True,
+                separator=', ',
+                formatter={'float_kind': lambda x: f"{x:8.4f}"}
+            )
+            self.matrix_display.setPlainText(formatted_matrix)
+            self.log.append("[SUCCESS] Added Mass calculation complete.")
+        self.log.append("[GUI] Process successfully completed.")
+
+    def on_worker_error(self, error_msg):
+        self.btn_run.setEnabled(True)
+        self.btn_run.setText("RUN GENERATION")
+        QMessageBox.critical(self, "Error", f"Failed: {error_msg}")
 
     def generate_plot(self):
         target_dir = self.current_session_folder
         p = self.get_parameters(target_dir)
         if p is None: return
         try:
-            print("[GUI] Generating developed petal profile...")
             dat_file = os.path.join(target_dir, f"{p['FINAL_OBJECT_NAME']}.dat")
             msg = plot_and_save_profile(p["ENVELOPE_PARAMS"], p["ENVELOPE_LENGTH"], int(p["ENVELOPE_RESOLUTION"]), int(p["N_PETALS"]), int(p["ENVELOPE_RESOLUTION"]), dat_file, p["FINAL_OBJECT_NAME"])
             print(f"[GUI] Plotting results: {msg}")
@@ -542,24 +599,36 @@ class AirshipGUI(QMainWindow):
         self.btn_next.setEnabled(idx < count - 1)
 
     def setup_navigation_buttons(self):
-        nav = QWidget(); lay = QHBoxLayout(nav)
-        self.btn_back = QPushButton("<< PREV"); self.btn_back.setMinimumHeight(35); self.btn_back.setFixedWidth(100)
-        self.btn_next = QPushButton("NEXT >>"); self.btn_next.setMinimumHeight(35); self.btn_next.setFixedWidth(100)
+        nav = QWidget()
+        lay = QHBoxLayout(nav)
+        self.btn_back = QPushButton("<< PREV")
+        self.btn_back.setMinimumHeight(35)
+        self.btn_back.setFixedWidth(100)
+        self.btn_next = QPushButton("NEXT >>")
+        self.btn_next.setMinimumHeight(35)
+        self.btn_next.setFixedWidth(100)
         self.btn_next.setStyleSheet("background-color: #00BFFF; color: black; font-weight: bold;")
         self.btn_back.clicked.connect(lambda: self.tab_widget.setCurrentIndex(self.tab_widget.currentIndex()-1))
         self.btn_next.clicked.connect(lambda: self.tab_widget.setCurrentIndex(self.tab_widget.currentIndex()+1))
-        self.btn_reset = QPushButton("RESET"); self.btn_reset.setMinimumHeight(35); self.btn_reset.setFixedWidth(80)
+        self.btn_reset = QPushButton("RESET")
+        self.btn_reset.setMinimumHeight(35)
+        self.btn_reset.setFixedWidth(80)
         self.btn_reset.setStyleSheet("background-color: #555555; color: white; font-weight: bold;")
         self.btn_reset.clicked.connect(self.reset_to_defaults)
-        self.btn_exit = QPushButton("EXIT"); self.btn_exit.setMinimumHeight(35); self.btn_exit.setFixedWidth(80)
+        self.btn_exit = QPushButton("EXIT")
+        self.btn_exit.setMinimumHeight(35)
+        self.btn_exit.setFixedWidth(80)
         self.btn_exit.setStyleSheet("background-color: #D32F2F; color: white; font-weight: bold;")
         self.btn_exit.clicked.connect(self.close)
-        lay.addWidget(self.btn_back); lay.addWidget(self.btn_next); lay.addStretch()
-        lay.addWidget(self.btn_reset); lay.addWidget(self.btn_exit)
+        lay.addWidget(self.btn_back)
+        lay.addWidget(self.btn_next)
+        lay.addStretch()
+        lay.addWidget(self.btn_reset)
+        lay.addWidget(self.btn_exit)
         return nav
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
     ex = AirshipGUI()
     ex.show()
-    sys.exit(app.exec()) 
+    sys.exit(app.exec())
