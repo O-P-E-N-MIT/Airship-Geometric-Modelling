@@ -8,7 +8,7 @@
 
 ### About
 
-The Airship Geometry Generator is an open-source Python-based framework designed to facilitate the design and 3D modeling of advanced airship hull geometries. It specializes in Gertler Envelope parametrization, allowing users to define complex aerodynamic shapes through specific geometric coefficients, such as maximum thickness position, nose/tail radii, and prismatic coefficients. The framework integrates with SALOME for automated 3D CAD generation and features a developed 2D petal (gore) generator for manufacturing preparation.
+STRATOS is an open-source Python-based framework designed to facilitate the design and 3D modeling of advanced airship hull geometries. It specializes in Gertler Envelope parametrization, allowing users to define complex aerodynamic shapes through specific geometric coefficients, such as maximum thickness position, nose/tail radii, and prismatic coefficients. The framework integrates with SALOME for automated 3D CAD generation and features a developed 2D petal (gore) generator for manufacturing preparation.
 
 ### Features
 
