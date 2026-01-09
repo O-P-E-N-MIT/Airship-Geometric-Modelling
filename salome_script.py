@@ -70,7 +70,7 @@ def translate_object (object, x_offset, y_offset, z_offset):
 # Modelling of envelope
 # ---
 
-print('[LOG] Generating Hull Profile...')
+print('[LOG] Generating hull Profile...')
 
 def create_envelope (params, length):
     print(f'[LOG] Generating envelope having Gertler parameters {params}...')
@@ -104,7 +104,7 @@ if LOBE_NUMBER == 3:
 fins = []
 
 if INCLUDE_FINS:
-    print('[LOG] Generating Fins...')
+    print('[LOG] Generating fins...')
 
     RC_RADIAL_OFFSET = extreme_gertler.at(FIN_AXIAL_OFFSET)
     TC_RADIAL_OFFSET = RC_RADIAL_OFFSET + FIN_HEIGHT
@@ -189,8 +189,8 @@ OUTPUT_FILE_LOBES = os.path.join(OUTPUT_DIRECTORY, f"{FINAL_OBJECT_NAME}_lobes.{
 print(f'[LOG] Attempting to export...')
 
 if OUTPUT_FORMAT == 'STL':
-    # The deflection used for STL generation is a default one because we can later work with it using MeshLab.
-    geompy.ExportSTL(Final_Airship_Solid, OUTPUT_FILE_COMPLETE, False)
+    # TODO: Figure out a good guess for deflection for exporting STL with length/resolution units.
+    geompy.ExportSTL(Final_Airship_Solid, OUTPUT_FILE_COMPLETE, True, 0.001 * ENVELOPE_LENGTH/ENVELOPE_RESOLUTION)
     geompy.ExportSTL(Final_Lobes_Solid, OUTPUT_FILE_LOBES, False)
 elif OUTPUT_FORMAT == 'BREP':
     geompy.ExportBREP(Final_Airship_Solid, OUTPUT_FILE_COMPLETE)

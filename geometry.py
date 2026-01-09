@@ -124,7 +124,8 @@ class AirshipGeometry:
                 filters["targetfacenum"] = 1500
 
                 # Process the full airship mesh for visual export
-                
+
+            # TODO: Add on option if the user wants their geometry file exported to be processed with MeshLab.
             # if os.path.exists(output_file_complete):
             #     print(f"[STATUS] Applying MeshLab filters to {output_file_complete}...")
             #     apply_filters(output_file_complete, **filters)
