@@ -124,9 +124,10 @@ class AirshipGeometry:
                 filters["targetfacenum"] = 1500
 
                 # Process the full airship mesh for visual export
-            if os.path.exists(output_file_complete):
-                print(f"[STATUS] Applying MeshLab filters to {output_file_complete}...")
-                apply_filters(output_file_complete, **filters)
+                
+            # if os.path.exists(output_file_complete):
+            #     print(f"[STATUS] Applying MeshLab filters to {output_file_complete}...")
+            #     apply_filters(output_file_complete, **filters)
 
             # --- Added Mass Calculation ---
             added_mass_matrix = None
