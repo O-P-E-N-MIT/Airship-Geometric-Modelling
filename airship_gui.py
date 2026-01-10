@@ -1,11 +1,11 @@
-import sys
 import os
 import re
-import numpy as np
-import io
+import sys
 
-from PySide6.QtGui import QFont, QDoubleValidator
+# --- 3D VISUALIZATION IMPORTS ---
+import pyvista as pv
 from PySide6.QtCore import Qt, Signal, QThread, QObject
+from PySide6.QtGui import QFont, QDoubleValidator
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QTabWidget, QVBoxLayout,
     QHBoxLayout, QGridLayout, QLabel, QLineEdit, QPushButton,
@@ -13,15 +13,13 @@ from PySide6.QtWidgets import (
     QButtonGroup, QCheckBox, QMessageBox, QSplitter, QTableWidget,
     QTableWidgetItem, QHeaderView
 )
-
-# --- 3D VISUALIZATION IMPORTS ---
-import pyvista as pv
 from pyvistaqt import BackgroundPlotter
 
-from geometry import AirshipGeometry, plot_and_save_profile
-from geometry_handler import STANDARD_ENVELOPES
 # Integration of balloon.py
 from balloon import create_balloon_geometry
+from geometry import AirshipGeometry, plot_and_save_profile
+from geometry_handler import STANDARD_ENVELOPES
+
 
 # --- THREAD-SAFE LOGGING SYSTEM ---
 
@@ -55,12 +53,27 @@ class GenerationWorker(QObject):
         self.gore_model = gore_model
         self.compute_added_mass = compute_added_mass
 
+class GenerationWorker(QObject):
+    """Handles the heavy generation logic in a background thread."""
+    finished = Signal(object)
+    error = Signal(str)
+
+    def __init__(self, mode_id, params, volume_val, gore_model, compute_added_mass=True):
+        super().__init__()
+        self.mode_id = mode_id
+        self.params = params
+        self.volume_val = volume_val
+        self.gore_model = gore_model
+        self.compute_added_mass = compute_added_mass
+
     def run(self):
         try:
+            # Determine the file path for the primary STL output
             output_path = os.path.join(self.params['OUTPUT_DIRECTORY'], f"{self.params['FINAL_OBJECT_NAME']}.stl")
 
             if self.mode_id == 3: # BALLOON MODE
                 print(f"[PROCESS] Starting Superpressure Balloon generation...")
+                # Balloon generation logic remains independent of Salome
                 create_balloon_geometry(
                     gore_model=self.gore_model,
                     target_volume=self.volume_val,
@@ -75,18 +88,21 @@ class GenerationWorker(QObject):
                 self.finished.emit((None, output_path))
 
             else: # AIRSHIP MODES
-                print(f"[PROCESS] Launching Salome subprocess for STL export...")
+                print(f"[PROCESS] Initializing Airship Geometry Engine...")
                 g = AirshipGeometry(self.params, self.params['SALOME_PATH'])
 
-                # REFINED LOGIC: Pass "STL" string to completely bypass added mass blocks in the geometry scripts
+                # LOGIC BYPASS:
+                # If compute_added_mass is False, we pass the format (e.g., "STL") to skip BEM
+                # If True, we pass "FULL" to trigger compute_added_mass in geometry.py
                 if not self.compute_added_mass:
-                    process, matrix = g.run_salome("STL")
+                    fmt = self.params.get('EXPORT_FORMAT', 'STL')
+                    process, matrix = g.run_salome(fmt)
                     matrix = None
                 else:
                     print("[PROCESS] Computing Added Mass Matrix...")
                     process, matrix = g.run_salome("FULL")
 
-                print(f"[SUCCESS] Airship STL generated at: {output_path}")
+                print(f"[SUCCESS] Airship output generated at: {output_path}")
                 self.finished.emit((matrix, output_path))
 
         except Exception as e:
