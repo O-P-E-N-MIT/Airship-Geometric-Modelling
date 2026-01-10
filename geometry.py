@@ -18,7 +18,8 @@ DIR_PATH = os.path.dirname(os.path.abspath(__file__))
 BASE_SCRIPT_FILE = "salome_script.py"
 BREAKER = "# INPUT PARAMETERS END"
 # Load the base Salome script template
-BASE_SCRIPT = open(os.path.join(DIR_PATH, BASE_SCRIPT_FILE), 'r').read().split(BREAKER, 1)[1]
+with open(os.path.join(DIR_PATH, BASE_SCRIPT_FILE), 'r') as f:
+    BASE_SCRIPT = f.read().split(BREAKER, 1)[1]
 
 class AirshipGeometry:
 
@@ -41,6 +42,7 @@ class AirshipGeometry:
 
         script_content = ["# INPUT PARAMETERS START"]
 
+        # Handle Volumetric Dimensioning
         if "VOLUME" in self.params:
             self.params["ENVELOPE_LENGTH"] = GertlerEnvelope.from_parameters_volume(
                 self.params["ENVELOPE_PARAMS"],
@@ -52,6 +54,7 @@ class AirshipGeometry:
                 self.params["LOBE_OFFSET_Z"]
             ).length
 
+        # Set default values for Salome script injection
         self.params.setdefault("ENVELOPE_TRUNCATION_RATIO", 0)
         self.params.setdefault("CENTRAL_LOBE_PARAMS", self.params["ENVELOPE_PARAMS"])
         self.params.setdefault("CENTRAL_LOBE_LENGTH", self.params["ENVELOPE_LENGTH"])
@@ -68,7 +71,9 @@ class AirshipGeometry:
                 script_content.append(f"{key} = {value}")
 
         script_content.append(f"DIRECTORY_PATH = r'{DIR_PATH}'")
-        script_content.append(f"OUTPUT_FORMAT = r'{export_format}'")
+        # Ensure Salome knows which format to export
+        actual_format = "STL" if export_format == "FULL" else export_format
+        script_content.append(f"OUTPUT_FORMAT = r'{actual_format}'")
 
         script_content.append("# INPUT PARAMETERS END\n")
         script_content.append(BASE_SCRIPT)
@@ -95,7 +100,6 @@ class AirshipGeometry:
         print("[STATUS] Launching Salome subprocess...")
 
         try:
-            # Execute Salome and capture output for the GUI stream redirector
             process = subprocess.run(
                 command_str,
                 capture_output=True,
@@ -105,51 +109,48 @@ class AirshipGeometry:
                 shell=True
             )
 
-            # Print stdout/stderr so the StatusLogger can catch them
             if process.stdout:
                 print(process.stdout)
             if process.stderr:
                 print(f"[SALOME ERROR] {process.stderr}")
 
             final_obj_name = self.params["FINAL_OBJECT_NAME"]
-            output_file_complete = os.path.join(self.output_directory, f"{final_obj_name}.{export_format.lower()}")
-            output_file_lobes = os.path.join(self.output_directory, f"{final_obj_name}_lobes.{export_format.lower()}")
+            output_file_lobes = os.path.join(self.output_directory, f"{final_obj_name}_lobes.stl")
 
             # Setup MeshLab decimation filters
             filters = {}
             if "MESH_TARGET_FACES" in self.params:
                 filters["targetfacenum"] = int(self.params["MESH_TARGET_FACES"])
             else:
-                # Default to 1500 faces to ensure calculation speed while maintaining accuracy
                 filters["targetfacenum"] = 1500
 
-                # Process the full airship mesh for visual export
-
-            # TODO: Add on option if the user wants their geometry file exported to be processed with MeshLab.
-            # if os.path.exists(output_file_complete):
-            #     print(f"[STATUS] Applying MeshLab filters to {output_file_complete}...")
-            #     apply_filters(output_file_complete, **filters)
-
-            # --- Added Mass Calculation ---
+            # --- Added Mass Calculation Logic ---
             added_mass_matrix = None
-            if os.path.exists(output_file_lobes):
-                print("[STATUS] Loading lobe mesh for Added Mass calculation...")
-                meshdata = get_meshdata(output_file_lobes, **filters)
-                print("[STATUS] Computing Added Mass Matrix (Vectorized)...")
-                # compute_added_mass is now the vectorized, high-speed version
-                added_mass_matrix = compute_added_mass(*meshdata)
-            else:
-                print("[WARNING] Output file for lobes export not found.")
 
-            # Return both for the GUI to display
+            # BYPASS LOGIC: Only compute if export_format is specifically "FULL"
+            if export_format == "FULL":
+                if os.path.exists(output_file_lobes):
+                    print("[STATUS] Loading lobe mesh for Added Mass calculation...")
+                    meshdata = get_meshdata(output_file_lobes, **filters)
+                    print("[STATUS] Computing Added Mass Matrix (Vectorized)...")
+                    added_mass_matrix = compute_added_mass(*meshdata) #
+                else:
+                    print("[WARNING] Output file for lobes export not found. Skipping Added Mass.")
+            else:
+                print("[STATUS] Added Mass calculation skipped by user.")
+
             return process, added_mass_matrix
 
         except Exception as e:
             raise RuntimeError(f"Salome execution failed: {e}")
 
-    def geometric_properties (self):
+    def geometric_properties(self):
         """Calculates theoretical geometric values for property display."""
-        envelope = GertlerEnvelope.from_parameters(self.params["ENVELOPE_PARAMS"], self.params["ENVELOPE_LENGTH"], self.params["ENVELOPE_RESOLUTION"])
+        envelope = GertlerEnvelope.from_parameters(
+            self.params["ENVELOPE_PARAMS"],
+            self.params["ENVELOPE_LENGTH"],
+            self.params["ENVELOPE_RESOLUTION"]
+        )
 
         lobe_number = self.params["LOBE_NUMBER"]
         e = self.params["LOBE_OFFSET_X"]
@@ -163,7 +164,7 @@ class AirshipGeometry:
         else:
             return envelope.volume_trilobe(e, f, g), envelope.surface_area_trilobe(e, f, g), envelope.top_projected_area_trilobe(e, f, g), envelope.side_projected_area_trilobe(e, f, g)
 
-def plot_and_save_profile (params, length, nx, num_petals, nc, filename, shape_name="Airship_Geometry"):
+def plot_and_save_profile(params, length, nx, num_petals, nc, filename, shape_name="Airship_Geometry"):
     """Generates the DAT file and profile plot for the developed gore/petal."""
     coords_2D = GertlerEnvelope.from_parameters(params, length, nx).petal_coordinates(num_petals, nc)
 
