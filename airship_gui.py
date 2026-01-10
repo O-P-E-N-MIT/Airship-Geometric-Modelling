@@ -590,7 +590,7 @@ class AirshipGUI(QMainWindow):
         try:
             self.plotter.clear()
             mesh = pv.read(stl_path)
-            self.plotter.add_mesh(mesh, color="#00BFFF", show_edges=True, edge_color="#333333", opacity=0.8)
+            self.plotter.add_mesh(mesh, color="#00BFFF", show_edges=True, edge_color="#333333", opacity=1)
             self.plotter.view_isometric()
             self.plotter.reset_camera()
         except Exception as e:
@@ -780,8 +780,72 @@ class AirshipGUI(QMainWindow):
             if k in self.inputs: self.inputs[k].set_value(v)
 
     def reset_to_defaults(self):
-        self.load_preset(self.preset_combo.currentIndex())
-        print("Parameters reset to preset defaults.")
+        current_preset = self.preset_combo.currentText()
+        vals = STANDARD_ENVELOPES[current_preset]  # (m1, r0, r1, cp, l2d)
+        for k, v in zip(["m1", "r0", "r1", "cp", "l2d"], vals):
+            if k in self.inputs:
+                self.inputs[k].set_value(v)
+
+        # 2. Reset Mode-Specific General Dimensions
+        self.inputs["ENVELOPE_LENGTH"].set_value(100.0)
+        self.inputs["VOLUME"].set_value(5000.0)
+        self.inputs["ENVELOPE_RESOLUTION"].set_value(150)
+
+        # 3. Reset Fins Tab Sliders
+        if "INCLUDE_FINS" in self.inputs:
+            self.inputs["INCLUDE_FINS"].setChecked(True)
+            for fin_key in ["FIN_RC_LENGTH", "FIN_HEIGHT", "FIN_THICKNESS",
+                            "FIN_TAPER_RATIO", "FIN_AXIAL_OFFSET",
+                            "FIN_SECTION_RESOLUTION", "FIN_SWEEP_ANGLE", "FIN_TIP_ANGLE"]:
+                if fin_key in self.inputs:
+                    # Setting defaults based on initial GUI setup
+                    default_val = 15.5 if "LENGTH" in fin_key or "HEIGHT" in fin_key else 0.0
+                    if fin_key == "FIN_THICKNESS": default_val = 10.0
+                    if fin_key == "FIN_TAPER_RATIO": default_val = 0.55
+                    if fin_key == "FIN_AXIAL_OFFSET": default_val = 80.0
+                    if fin_key == "FIN_SECTION_RESOLUTION": default_val = 60
+                    if fin_key == "FIN_TIP_ANGLE": default_val = 15.0
+                    self.inputs[fin_key].set_value(default_val)
+
+            self.inputs["FIN_NUMBER"].set_value(4)
+            self.inputs["FIN_THETA_POS_TEXT"].setText("0.0, 90.0, 180.0, 270.0")
+
+        # 4. Reset Super Pressure Balloon Parameters
+        if "GORE_MODEL" in self.inputs:
+            self.inputs["GORE_MODEL"].setCurrentIndex(0)
+            self.inputs["ASPECT_RATIO"].set_value(1.0)
+            self.inputs["GORE_AMPLITUDE"].set_value(0.05)
+            self.inputs["GORE_FADE_POWER"].set_value(4.0)
+            self.inputs["BULGE_AMPLITUDE"].set_value(0.0)
+            self.inputs["THETA_RES"].set_value(400)
+            self.inputs["PHI_RES"].set_value(600)
+
+        # 5. Reset Multi-Lobe/Fairing Configuration
+        for lobe_key in ["LOBE_OFFSET_X_SLIDER", "LOBE_OFFSET_Y_SLIDER", "LOBE_OFFSET_Z_SLIDER"]:
+            if lobe_key in self.inputs:
+                self.inputs[lobe_key].set_value(10.0)
+        if "SHEET_LENGTH_RATIO_SLIDER" in self.inputs:
+            self.inputs["SHEET_LENGTH_RATIO_SLIDER"].set_value(0.5)
+
+        # 6. CLEAR OUTPUT TAB DISPLAYS
+        # Clear the status log
+        self.log.clear()
+        self.log.append("Status: Ready (Parameters Reset)")
+
+        # Clear the Added Mass Matrix table
+        self.matrix_table.clearContents()
+        # Restore headers in case they were modified
+        self.matrix_table.setHorizontalHeaderLabels(["u", "v", "w", "p", "q", "r"])
+        self.matrix_table.setVerticalHeaderLabels(["X", "Y", "Z", "K", "M", "N"])
+
+        # Clear the 3D Viewer
+        self.plotter.clear()
+
+        # Reset Project Name
+        self.inputs["FINAL_OBJECT_NAME"].setText("Airship_Project")
+
+        # Trigger an auto-update for theoretical properties
+        self._auto_update_props()
 
     def _update_navigation_buttons(self):
         idx = self.tab_widget.currentIndex()
