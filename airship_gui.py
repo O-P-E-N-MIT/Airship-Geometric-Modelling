@@ -663,6 +663,7 @@ class AirshipGUI(QMainWindow):
         if is_vol:
             try:
                 from geometry_handler import GertlerEnvelope
+
                 temp_env = GertlerEnvelope.from_parameters_volume(
                     p["ENVELOPE_PARAMS"],
                     self.inputs["VOLUME"].get_value(),
@@ -672,9 +673,11 @@ class AirshipGUI(QMainWindow):
                     p["LOBE_OFFSET_Y"],
                     p["LOBE_OFFSET_Z"]
                 )
+
                 hull_len = temp_env.length
                 p["ENVELOPE_LENGTH"] = hull_len
-            except:
+            except Exception as e:
+                print(e)
                 hull_len = 100.0
 
         req_le = (p.get("FIN_AXIAL_OFFSET", 80) / 100.0) * hull_len

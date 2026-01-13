@@ -21,7 +21,7 @@ except ImportError:
 try:
     from scipy.optimize import fsolve
 except ImportError:
-    print("Scipy not found. Volumetric generation will be mocked.")
+    print("Scipy not found. Volumetric generation and Aerostatic optimisation will be mocked.")
 
 # Standard preset envelopes.
 STANDARD_ENVELOPES = {
@@ -229,8 +229,8 @@ class GertlerEnvelope:
     
     # Set the length of the envelope
     def set_length (self, l):
-        self.length = l
         self.diameter = l * self.diameter / self.length
+        self.length = l
 
     # Returns a copy of the envelope.
     def copy (self):
@@ -275,11 +275,58 @@ class GertlerEnvelope:
     # params = (m1, r0, r1, cp, l2d)
     # length = Length of the envelope
     # n = Number of points to be generated along the length
-    def from_parameters (params, length, n):
+    def from_parameters (params, length, n=100):
         coeffs = GertlerEnvelope.get_coefficients(params)
         diameter = length / params[4]
         return GertlerEnvelope(coeffs, length, diameter, n)
     
+    # Sets the length of the envelope for the given volume.
+    #
+    # volume = Volume of the envelope
+    # lobe_number = Number of lobes 
+    # e, f, g = Multi lobe distances
+    #
+    # NOTE: The following code assumes all the lobes are of same shape and length.
+    def set_volume (self, volume, lobe_number=1, e=0, f=0, g=0):
+        l2d = self.length / self.diameter
+        cp = np.dot(self.coeffs, [1/2, 1/3, 1/4, 1/5, 1/6, 1/7]) * 4
+
+        # Calculation of length using V = pi * D^2 * L * cp/4 for a monolobe. In case of multilobe, the formula for volume is 
+        # complicated and scipy's fsolve is used to compute the required length for the given volume. 
+        # 
+        # For initial estimate of length of multi lobes, it is assumed there are no intersections between the lobe. This gives
+        # us a good initial estimate making it more faster for us to arrive at the actual value.
+        # 
+        # Volume = Number of lobes * pi * D^2 * L_estimate * cp/4
+        initial_length = ((4 * volume * l2d**2) / (np.pi * cp * lobe_number))**(1/3)
+        self.set_length(initial_length)
+
+        if lobe_number == 1:
+            # In case of monolobe, the initial length estimate is exactly the length of monolobe.
+            return self
+        
+        # Different function is used in different case of number of lobes here. If we were to put this if condition within one function, 
+        # it will be computationally inefficient.
+        elif lobe_number == 2:
+            # In case of bilobe design,
+            def func (l):
+                # Update the new length to the envelope.
+                self.set_length(l[0])
+                # New estimate of the volume from the new length.
+                volume_iter = self.volume_bilobe(f)
+                # Returns a factor indicating how much did the volume change with the new length.
+                # With this factor approaching 0, the length will approach the required length accordingly.
+                return (volume - volume_iter) / volume  
+        else:
+            # In case of trilobe design,
+            def func (l):
+                self.set_length(l[0])
+                volume_iter = self.volume_trilobe(e, f, g)
+                return (volume - volume_iter) / volume
+                
+        fsolve(func, initial_length)
+        return self
+
     # Returns a GertlerEnvelope from standard parameters but with volume
     #
     # params = (m1, r0, r1, cp, l2d)
@@ -287,51 +334,10 @@ class GertlerEnvelope:
     # n = Number of points to be generated along the length
     # lobe_number = Number of lobes 
     # e, f, g = Multi lobe distances
-    #
-    # NOTE: The following code assumes all the lobes are of same shape and length.
-    def from_parameters_volume (params, volume, n, lobe_number = 1, e = 0, f = 0, g = 0):
-        coeffs = GertlerEnvelope.get_coefficients(params)
-        cp = params[3]
-        l2d = params[4]
-
-        # Calculation of length using V = pi * D^2 * L * cp/4 for a monolobe
-        length = ((4 * volume * l2d**2) / (np.pi * cp))**(1/3)
-
-        if lobe_number == 1:
-            # In case of monolobe, just pass the envelope
-            return GertlerEnvelope(coeffs, length, length / l2d, n)
-        else:
-            # In case of multilobe, the formula for volume is complicated and scipy's fsolve is used to compute 
-            # the required length for the given volume. 
-            # 
-            # For initial estimate of length, it is assumed there are no intersections between the lobe. This gives
-            # us a good initial estimate making it more faster for us to arrive at the actual value.
-            # 
-            # Volume = Number of lobes * pi * D^2 * L_estimate * cp/4
-            initial_estimate = length / (lobe_number**(1/3))
-            initial_envelope = GertlerEnvelope(coeffs, initial_estimate, initial_estimate / l2d, n)
-
-            # Different function is used in different case here. If we were to put this if condition within one function,
-            # it will be computationally inefficient.
-            if lobe_number == 2:
-                # In case of bilobe design,
-                def func (l):
-                    # Update the new length to the envelope.
-                    initial_envelope.set_length(l[0])
-                    # New estimate of the volume from the new length.
-                    volume_iter = initial_envelope.volume_bilobe(f)
-                    # Returns a factor indicating how much did the volume change with the new length.
-                    # With this factor approaching 0, the length will approach the required length accordingly.
-                    return (volume - volume_iter) / volume  
-            else:
-                # In case of trilobe design,
-                def func (l):
-                    initial_envelope.set_length(l[0])
-                    volume_iter = initial_envelope.volume_trilobe(e, f, g)
-                    return (volume - volume_iter) / volume
-                
-            fsolve(func, initial_estimate)
-            return initial_envelope
+    def from_parameters_volume (params, volume, n=100, lobe_number=1, e=0, f=0, g=0):
+        envelope = GertlerEnvelope.from_parameters(params, 1, n)
+        envelope.set_volume(volume, lobe_number, e, f, g)
+        return envelope
 
 # Returns the half thickness of a symmetric NACA 4 digit airfoil.
 #
