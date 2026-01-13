@@ -184,6 +184,7 @@ class AirshipGUI(QMainWindow):
         self.output_tab = QWidget()
 
         self.setup_primary_tab_layout()
+        self.setup_aerostatics_tab()
         self.setup_fairings_tab()
         self.setup_fin_tab()
         self.setup_output_tab()
@@ -215,7 +216,7 @@ class AirshipGUI(QMainWindow):
     def _init_persistent_controls(self):
         self.mode_button_group = QButtonGroup(self)
         self.mode_btns = []
-        for i, name in enumerate(["STANDARD MODE", "VOLUMETRIC MODE", "SUPER PRESSURE BALLOON"], 1):
+        for i, name in enumerate(["STANDARD MODE", "VOLUMETRIC MODE", "SUPER PRESSURE BALLOON", "AEROSTATIC"], 1):
             btn = QPushButton(name)
             btn.setCheckable(True)
             btn.setMinimumHeight(40)
@@ -349,24 +350,69 @@ class AirshipGUI(QMainWindow):
         layout.addWidget(self.volume_box)
         layout.addStretch()
 
+    def setup_aerostatics_tab(self):
+        self.aerostatics_tab = QWidget()
+        layout = QVBoxLayout(self.aerostatics_tab)
+
+        env_grp = QGroupBox("Atmospheric Conditions")
+        el = QGridLayout(env_grp)
+        self.inputs["OPERATIONAL_HEIGHT"] = LabeledSlider("Op. Altitude (m)", 0, 20000, 4500, 10, 0)
+        self.inputs["RELATIVE_HUMIDITY"] = LabeledSlider("Rel. Humidity (0-1)", 0, 1, 0.7, 0.01, 2)
+        el.addWidget(self.inputs["OPERATIONAL_HEIGHT"], 0, 0)
+        el.addWidget(self.inputs["RELATIVE_HUMIDITY"], 0, 1)
+        layout.addWidget(env_grp)
+
+        gas_grp = QGroupBox("Lifting Gas Properties")
+        gl = QGridLayout(gas_grp)
+        self.inputs["GAS_PURITY"] = LabeledSlider("Purity (0-1)", 0.8, 1, 0.97, 0.001, 3)
+        self.inputs["GAS_CONSTANT"] = LabeledSlider("Gas Constant (He=2077)", 200, 4200, 2077, 1, 0)
+        self.inputs["DELTA_P"] = LabeledSlider("Delta P (Pa)", 0, 1000, 500, 1, 0)
+        self.inputs["DELTA_T"] = LabeledSlider("Delta T (K)", 0, 20, 5, 0.1, 1)
+        gl.addWidget(self.inputs["GAS_PURITY"], 0, 0)
+        gl.addWidget(self.inputs["GAS_CONSTANT"], 0, 1)
+        gl.addWidget(self.inputs["DELTA_P"], 1, 0)
+        gl.addWidget(self.inputs["DELTA_T"], 1, 1)
+        layout.addWidget(gas_grp)
+
+        mass_grp = QGroupBox("Mass and Envelope")
+        ml = QGridLayout(mass_grp)
+        self.inputs["SKIN_DENSITY"] = LabeledSlider("Skin Density (kg/m²)", 0.1, 2.0, 0.75, 0.01, 2)
+        self.inputs["PAYLOAD_MASS"] = LabeledSlider("Payload/Add. Mass (kg)", 0, 5000, 220, 1, 1)
+        ml.addWidget(self.inputs["SKIN_DENSITY"], 0, 0)
+        ml.addWidget(self.inputs["PAYLOAD_MASS"], 0, 1)
+        layout.addWidget(mass_grp)
+
+        layout.addStretch()
+
     def refresh_tabs(self):
         self.tab_widget.blockSignals(True)
         mode_id = self.mode_button_group.checkedId()
+
+        is_standard = (mode_id == 1)
         is_vol = (mode_id == 2)
         is_balloon = (mode_id == 3)
+        is_aero = (mode_id == 4)
         is_multi = self.lobe_button_group.checkedId() > 1 and not is_balloon
 
         self.hull_shape_box.setHidden(is_balloon)
         self.balloon_params_box.setHidden(not is_balloon)
         self.hull_config_group.setHidden(is_balloon)
-        self.length_box.setHidden(is_vol or is_balloon)
+        self.length_box.setHidden(not is_standard)
         self.volume_box.setHidden(not (is_vol or is_balloon))
 
         curr = self.tab_widget.currentIndex()
         self.tab_widget.clear()
         self.tab_widget.addTab(self.primary_input_tab, "Envelope Geometry")
-        if is_multi: self.tab_widget.addTab(self.fairings_tab, "Multi-Lobe Configuration")
-        if not is_balloon: self.tab_widget.addTab(self.fin_tab, "Fin Design")
+
+        if is_aero:
+            self.tab_widget.addTab(self.aerostatics_tab, "Aerostatic Analysis")
+
+        if is_multi:
+            self.tab_widget.addTab(self.fairings_tab, "Multi-Lobe Configuration")
+
+        if not is_balloon:
+            self.tab_widget.addTab(self.fin_tab, "Fin Design")
+
         self.tab_widget.addTab(self.output_tab, "Output")
         self.tab_widget.setCurrentIndex(min(curr, self.tab_widget.count()-1))
         self.tab_widget.blockSignals(False)
@@ -623,62 +669,76 @@ class AirshipGUI(QMainWindow):
 
     def get_parameters(self, target_dir):
         p = {}
-        slider_keys = ["ENVELOPE_LENGTH", "ENVELOPE_RESOLUTION", "m1", "r0", "r1", "cp", "l2d",
-                       "FIN_AXIAL_OFFSET", "FIN_RC_LENGTH", "FIN_HEIGHT", "FIN_THICKNESS",
-                       "FIN_TAPER_RATIO", "FIN_SWEEP_ANGLE", "FIN_TIP_ANGLE", "FIN_NUMBER",
-                       "FIN_SECTION_RESOLUTION"]
+        slider_keys = [
+            "ENVELOPE_LENGTH", "ENVELOPE_RESOLUTION", "m1", "r0", "r1", "cp", "l2d",
+            "FIN_AXIAL_OFFSET", "FIN_RC_LENGTH", "FIN_HEIGHT", "FIN_THICKNESS",
+            "FIN_TAPER_RATIO", "FIN_SWEEP_ANGLE", "FIN_TIP_ANGLE", "FIN_NUMBER",
+            "FIN_SECTION_RESOLUTION"
+        ]
 
-        balloon_slider_keys = ["THETA_RES", "PHI_RES", "ASPECT_RATIO", "BULGE_AMPLITUDE",
-                               "BULGE_POWER", "GORE_AMPLITUDE", "GORE_FADE_POWER"]
+        balloon_slider_keys = [
+            "THETA_RES", "PHI_RES", "ASPECT_RATIO", "BULGE_AMPLITUDE",
+            "BULGE_POWER", "GORE_AMPLITUDE", "GORE_FADE_POWER"
+        ]
 
-        for key in (slider_keys + balloon_slider_keys):
-            if key in self.inputs: p[key] = self.inputs[key].get_value()
+        aero_keys = [
+            "OPERATIONAL_HEIGHT", "RELATIVE_HUMIDITY", "GAS_PURITY",
+            "GAS_CONSTANT", "DELTA_P", "DELTA_T", "SKIN_DENSITY", "PAYLOAD_MASS"
+        ]
+
+        for key in (slider_keys + balloon_slider_keys + aero_keys):
+            if key in self.inputs:
+                p[key] = self.inputs[key].get_value()
 
         p["N_PETALS"] = self.inputs["N_PETALS"].get_value()
         p["LOBE_OFFSET_X"] = self.inputs["LOBE_OFFSET_X_SLIDER"].get_value()
         p["LOBE_OFFSET_Y"] = self.inputs["LOBE_OFFSET_Y_SLIDER"].get_value()
         p["LOBE_OFFSET_Z"] = self.inputs["LOBE_OFFSET_Z_SLIDER"].get_value()
-        p["MULTI_LOBE_OFFSET_FACTOR"] = 0
         p["SHEET_LENGTH_RATIO"] = self.inputs["SHEET_LENGTH_RATIO_SLIDER"].get_value()
 
         lobe_id = self.lobe_button_group.checkedId()
         p["LOBE_NUMBER"] = lobe_id if lobe_id != -1 else 1
         p["ENVELOPE_PARAMS"] = (p.get("m1", 0.419), p.get("r0", 0.337), p.get("r1", 0.251), p.get("cp", 0.651), p.get("l2d", 3.266))
         p["FINAL_OBJECT_NAME"] = self.inputs["FINAL_OBJECT_NAME"].text()
-        p["type"] = self.preset_combo.currentText().split(" ")[0]
         p["INCLUDE_FINS"] = self.inputs["INCLUDE_FINS"].isChecked()
 
-        p["balloon_params"] = {
-            "ASPECT_RATIO": p.get("ASPECT_RATIO", 1.0),
-            "BULGE_AMPLITUDE": p.get("BULGE_AMPLITUDE", 0.0),
-            "BULGE_POWER": p.get("BULGE_POWER", 1.0),
-            "GORE_AMPLITUDE": p.get("GORE_AMPLITUDE", 0.05),
-            "GORE_FADE": p.get("GORE_FADE_POWER", 4.0),
-            "GORE_POWER": p.get("GORE_FADE_POWER", 4.0)
-        }
-
-        is_vol = self.mode_button_group.checkedId() == 2
+        mode_id = self.mode_button_group.checkedId()
         hull_len = p.get("ENVELOPE_LENGTH", 100.0)
 
-        if is_vol:
-            try:
-                from geometry_handler import GertlerEnvelope
+        if mode_id == 4:
+            from aerostatics import AerostatHull
+            from geometry_handler import GertlerEnvelope
+            base_env = GertlerEnvelope.from_parameters(p["ENVELOPE_PARAMS"], 1)
+            ahull = AerostatHull(
+                envelope=base_env,
+                additional_mass=p.get("PAYLOAD_MASS", 220),
+                skin_density=p.get("SKIN_DENSITY", 0.75),
+                operational_height=p.get("OPERATIONAL_HEIGHT", 4500),
+                deployment_height=0,
+                margin_height=500,
+                RH=p.get("RELATIVE_HUMIDITY", 0.7),
+                purity=p.get("GAS_PURITY", 0.97),
+                delta_P=p.get("DELTA_P", 500),
+                delta_T=p.get("DELTA_T", 5),
+                gas_constant=p.get("GAS_CONSTANT", 2077)
+            )
+            resolved_env, _ = ahull.initialise_from_operational_altitude([1, 1000000])
+            hull_len = resolved_env.length
+            p["ENVELOPE_LENGTH"] = hull_len
 
-                temp_env = GertlerEnvelope.from_parameters_volume(
-                    p["ENVELOPE_PARAMS"],
-                    self.inputs["VOLUME"].get_value(),
-                    int(p["ENVELOPE_RESOLUTION"]),
-                    p["LOBE_NUMBER"],
-                    p["LOBE_OFFSET_X"],
-                    p["LOBE_OFFSET_Y"],
-                    p["LOBE_OFFSET_Z"]
-                )
-
-                hull_len = temp_env.length
-                p["ENVELOPE_LENGTH"] = hull_len
-            except Exception as e:
-                print(e)
-                hull_len = 100.0
+        elif mode_id == 2:
+            from geometry_handler import GertlerEnvelope
+            temp_env = GertlerEnvelope.from_parameters_volume(
+                p["ENVELOPE_PARAMS"],
+                self.inputs["VOLUME"].get_value(),
+                int(p["ENVELOPE_RESOLUTION"]),
+                p["LOBE_NUMBER"],
+                p["LOBE_OFFSET_X"],
+                p["LOBE_OFFSET_Y"],
+                p["LOBE_OFFSET_Z"]
+            )
+            hull_len = temp_env.length
+            p["ENVELOPE_LENGTH"] = hull_len
 
         req_le = (p.get("FIN_AXIAL_OFFSET", 80) / 100.0) * hull_len
         max_le = hull_len - p.get("FIN_RC_LENGTH", 15) - 0.5
@@ -691,6 +751,7 @@ class AirshipGUI(QMainWindow):
             return None
 
         p["OUTPUT_DIRECTORY"] = target_dir
+        p["SALOME_PATH"] = self.salome_path
         return p
 
     def run_process(self):
@@ -733,20 +794,56 @@ class AirshipGUI(QMainWindow):
         self.btn_run.setEnabled(True)
         self.btn_run.setText("RUN GENERATION")
 
-        # Immediate 3D Render
-        self._update_3d_view(stl_path)
+        if os.path.exists(stl_path):
+            self.plotter.clear()
+            mesh = pv.read(stl_path)
+            light_preview = mesh.decimate(0.80)
+
+            self.plotter.add_mesh(
+                light_preview,
+                color="#00BFFF",
+                show_edges=True,
+                edge_color="#333333",
+                line_width=1,
+                opacity=0.8
+            )
+            # ---------------------------------
+
+            self.plotter.reset_camera()
 
         if matrix is not None:
             for r in range(6):
                 for c in range(6):
-                    item = QTableWidgetItem(f"{matrix[r, c]:.4f}")
-                    item.setTextAlignment(Qt.AlignCenter)
-                    self.matrix_table.setItem(r, c, item)
-            self.log.append("[SUCCESS] Added Mass calculation complete.")
-        else:
-            self.matrix_table.clearContents()
-            self.matrix_table.setHorizontalHeaderLabels(["u", "v", "w", "p", "q", "r"])
-            self.matrix_table.setVerticalHeaderLabels(["X", "Y", "Z", "K", "M", "N"])
+                    self.matrix_table.setItem(r, c, QTableWidgetItem(f"{matrix[r,c]:.4f}"))
+
+        if self.mode_button_group.checkedId() == 4:
+            try:
+                p = self.get_parameters(self.current_session_folder)
+                from aerostatics import AerostatHull
+                from geometry_handler import GertlerEnvelope
+
+                resolved_env = GertlerEnvelope.from_parameters(p["ENVELOPE_PARAMS"], p["ENVELOPE_LENGTH"])
+                ahull = AerostatHull(
+                    envelope=resolved_env,
+                    additional_mass=p.get("PAYLOAD_MASS", 220),
+                    skin_density=p.get("SKIN_DENSITY", 0.75),
+                    operational_height=p.get("OPERATIONAL_HEIGHT", 4500),
+                    deployment_height=0,
+                    margin_height=500,
+                    RH=p.get("RELATIVE_HUMIDITY", 0.7),
+                    purity=p.get("GAS_PURITY", 0.97),
+                    delta_P=p.get("DELTA_P", 500),
+                    delta_T=p.get("DELTA_T", 5),
+                    gas_constant=p.get("GAS_CONSTANT", 2077)
+                )
+
+                h, Ln, Lg, I, BV = ahull.get_properties(n=1)
+                self.log.append("\n--- AEROSTATIC RESULTS ---")
+                self.log.append(f"Gross Static Lift: {Lg[0]:.2f} N")
+                self.log.append(f"Net Static Lift: {Ln[0]:.2f} N")
+                self.log.append(f"Inflation Fraction: {I[0]*100:.2f} %")
+            except Exception as e:
+                self.log.append(f"[ERROR] Aerostatic display failed: {str(e)}")
 
         self.log.append("[GUI] Process successfully completed.")
 
