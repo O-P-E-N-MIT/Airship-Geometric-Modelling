@@ -204,7 +204,7 @@ class AerostatHull:
         # Net static lift
         Ln = Lg - (rho_lg * I * volume + rho_ba * BV + total_mass) * g
 
-        return Ln, Lg, I, BV
+        return h, Ln, Lg, I, BV
 
 # Testing
 
