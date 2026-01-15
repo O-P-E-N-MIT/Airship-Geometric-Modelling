@@ -119,24 +119,10 @@ class AerostatHull:
         self.skin_density = skin_density
         self.additional_mass = additional_mass
 
-    def initialise_from_operational_altitude(self, bounds, target_lift=0):
-        """
-        Solves for the envelope length required to achieve target_lift
-        at the specified operational altitude.
-        """
-        def objective(L):
-            self.envelope.length = L
-            # Calculate properties at operational height
-            _, Ln, _, _, _ = self.get_properties(self.operational_height)
-            # We want (Actual Net Lift - Target Net Lift) to be zero
-            return (Ln - target_lift)**2
-
-        res = minimize_scalar(objective, bounds=bounds, method='bounded')
-        self.envelope.length = res.x
-
-        # Re-calculate factors for the new length
-        self.initialise()
-        return self.envelope, res.fun
+    def initialise_from_operational_altitude (self, volume_bounds, target_lift=0):
+        envelope, convergence = self.get_envelope_from_target(target_lift, self.operational_altitude, volume_bounds)
+        self.envelope = envelope
+        return envelope, convergence
 
     def get_envelope_from_target (self, target_lift, target_altitude, volume_bounds):
         envelope = self.envelope.copy()
@@ -168,7 +154,7 @@ class AerostatHull:
             def func (l):
                 envelope.set_length(l)
                 volume_iter = envelope.volume_trilobe(e, f, g)
-                mass_iter = skin_density * envelope.surface_area_bilobe(e, f, g) + additional_mass
+                mass_iter = skin_density * envelope.surface_area_trilobe(e, f, g) + additional_mass
                 l = get_net_lift(volume_iter, mass_iter, target_altitude, *self.gas_properties)
                 return abs(l - target_lift)
 
