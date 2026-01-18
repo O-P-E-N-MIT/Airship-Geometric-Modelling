@@ -363,8 +363,10 @@ class AirshipGUI(QMainWindow):
         el = QGridLayout(env_grp)
         self.inputs["OPERATIONAL_HEIGHT"] = LabeledSlider("Op. Altitude (m)", 0, 20000, 4500, 10, 0)
         self.inputs["RELATIVE_HUMIDITY"] = LabeledSlider("Rel. Humidity (0-1)", 0, 1, 0.7, 0.01, 2)
+        self.inputs["MARGIN_HEIGHT"] = LabeledSlider("Pressure Margin (m)", 0, 2000, 500, 10, 0) # NEW
         el.addWidget(self.inputs["OPERATIONAL_HEIGHT"], 0, 0)
         el.addWidget(self.inputs["RELATIVE_HUMIDITY"], 0, 1)
+        el.addWidget(self.inputs["MARGIN_HEIGHT"], 1, 0)
         layout.addWidget(env_grp)
 
         # 2. Lifting Gas Properties
@@ -380,17 +382,27 @@ class AirshipGUI(QMainWindow):
         gl.addWidget(self.inputs["DELTA_T"], 1, 1)
         layout.addWidget(gas_grp)
 
-        # 3. Mass and Target Lift
-        mass_grp = QGroupBox("Mass and Envelope Design")
+        # 3. Mass and Envelope Design
+        mass_grp = QGroupBox("Mass and Structural Design")
         ml = QGridLayout(mass_grp)
         self.inputs["SKIN_DENSITY"] = LabeledSlider("Skin Density (kg/m²)", 0.1, 2.0, 0.75, 0.01, 2)
         self.inputs["PAYLOAD_MASS"] = LabeledSlider("Payload/Add. Mass (kg)", 0, 5000, 220, 1, 1)
-        # Added Target Net Lift Slider
+        self.inputs["TETHER_DENSITY"] = LabeledSlider("Tether (kg/m)", 0, 5, 0.1, 0.01, 2) # NEW
+        self.inputs["FIN_DENSITY"] = LabeledSlider("Fin Material (kg/m³)", 0, 3000, 2700, 1, 0) # NEW
         self.inputs["TARGET_NET_LIFT"] = LabeledSlider("Target Net Lift (N)", -1000, 5000, 0, 1, 1)
+
+        # NEW: Optimization Checkbox
+        self.inputs["OPTIMIZE_LENGTH"] = QCheckBox("OPTIMIZE LENGTH FOR TARGET LIFT")
+        self.inputs["OPTIMIZE_LENGTH"].setChecked(True)
+        self.inputs["OPTIMIZE_LENGTH"].setFont(QFont("Arial", 10, QFont.Bold))
+        self.inputs["OPTIMIZE_LENGTH"].setStyleSheet("color: #00BFFF; margin-top: 10px;")
 
         ml.addWidget(self.inputs["SKIN_DENSITY"], 0, 0)
         ml.addWidget(self.inputs["PAYLOAD_MASS"], 0, 1)
-        ml.addWidget(self.inputs["TARGET_NET_LIFT"], 1, 0) # Target Lift at Op Height
+        ml.addWidget(self.inputs["TETHER_DENSITY"], 1, 0)
+        ml.addWidget(self.inputs["FIN_DENSITY"], 1, 1)
+        ml.addWidget(self.inputs["TARGET_NET_LIFT"], 2, 0)
+        ml.addWidget(self.inputs["OPTIMIZE_LENGTH"], 3, 0, 1, 2)
         layout.addWidget(mass_grp)
 
         layout.addStretch()
@@ -662,8 +674,8 @@ class AirshipGUI(QMainWindow):
             self.run_process()
 
     def run_instant_aerostatics(self):
-        """Performs analytical performance calculations without Salome or added mass."""
-        self.log.append("[PROCESS] Running Analytical Aerostatic Solver (Bypassing Geometry Export)...")
+        """Performs analytical performance calculations (Bypassing Geometry Export)."""
+        self.log.append("[PROCESS] Running Analytical Aerostatic Solver...")
         try:
             target_dir = self.current_session_folder
             p = self.get_parameters(target_dir)
@@ -671,18 +683,16 @@ class AirshipGUI(QMainWindow):
             from aerostatics import AerostatHull
             from geometry_handler import GertlerEnvelope
 
-            # 1. Create analytical geometry model
             resolved_env = GertlerEnvelope.from_parameters(p["ENVELOPE_PARAMS"], p["ENVELOPE_LENGTH"])
 
-            # 2. Run buoyancy and performance engine
-            # Pass all 11+ positional/keyword arguments required by your class
+            # FIXED: Comprehensive parameter passing for finalized performance calculation
             ahull = AerostatHull(
                 envelope=resolved_env,
                 additional_mass=p.get("PAYLOAD_MASS", 220),
                 skin_density=p.get("SKIN_DENSITY", 0.75),
                 operational_height=p.get("OPERATIONAL_HEIGHT", 4500),
-                deployment_height=0,   # Position 5
-                margin_height=500,     # Position 6
+                deployment_height=0,
+                margin_height=500,
                 RH=p.get("RELATIVE_HUMIDITY", 0.7),
                 purity=p.get("GAS_PURITY", 0.97),
                 delta_P=p.get("DELTA_P", 500),
@@ -692,26 +702,18 @@ class AirshipGUI(QMainWindow):
                 e=p.get("LOBE_OFFSET_X", 0),
                 f=p.get("LOBE_OFFSET_Y", 0),
                 g=p.get("LOBE_OFFSET_Z", 0),
-                tether_density=p.get("TETHER_DENSITY", 0),
-                fin_rc=p.get("FIN_RC_LENGTH"),                      
-                fin_taper_ratio=p.get("FIN_TAPER_RATIO"),           
-                fin_height=p.get("FIN_HEIGHT"),                  
-                fin_thickness=p.get("FIN_THICKNESS"),
-                fin_density=p.get("FIN_DENSITY", 2700)
+                fin_rc=p.get("FIN_RC_LENGTH", 0),
+                fin_height=p.get("FIN_HEIGHT", 0),
+                fin_taper_ratio=p.get("FIN_TAPER_RATIO", 1),
+                fin_thickness=p.get("FIN_THICKNESS", 0),
+                fin_number=p.get("FIN_NUMBER", 4)
             )
 
-            optimised_envelope, optimised_lift = ahull.initialise_from_operational_altitude([0, 1e15])
-            p["ENVELOPE_LENGTH"] = optimised_envelope.length
-
-            # 3. Compute arrays for plotting (h, Ln, Lg, I, BV)
             h, Ln, Lg, I, BV = ahull.get_properties(n=100)
             self.last_aero_data = (h, Ln, Lg, I, BV)
-
-            # 4. Refresh Dashboard graphs
             self.update_aero_plots(h, Ln, Lg, I, BV)
 
-            self.log.append(f"[SUCCESS] Optimisation complete with {optimised_lift:.3f}N lift at Operational altitude.")
-            self.log.append(f"[INFO] Final Hull Length: {p['ENVELOPE_LENGTH']:.3f} m")
+            self.log.append(f"[SUCCESS] Solver complete. Hull Length: {p['ENVELOPE_LENGTH']:.3f} m")
         except Exception as e:
             self.log.append(f"[ERROR] Solver failed: {str(e)}")
 
@@ -811,10 +813,10 @@ class AirshipGUI(QMainWindow):
     def get_parameters(self, target_dir):
         """
         Gathers all current GUI inputs into a single parameters dictionary.
-        If in Aerostatic mode, it triggers the buoyancy optimizer.
+        Handles analytical optimization for Aerostatic mode and length scaling for Volumetric mode.
         """
         p = {}
-        # List of all standard, balloon, and aerostatic slider keys
+        # Comprehensive list of all slider keys used across all tabs
         all_keys = [
             "ENVELOPE_LENGTH", "ENVELOPE_RESOLUTION", "m1", "r0", "r1", "cp", "l2d",
             "FIN_AXIAL_OFFSET", "FIN_RC_LENGTH", "FIN_HEIGHT", "FIN_THICKNESS",
@@ -830,7 +832,7 @@ class AirshipGUI(QMainWindow):
             if key in self.inputs:
                 p[key] = self.inputs[key].get_value()
 
-        # Extract fixed/text inputs
+        # Extract fixed/text and multi-lobe inputs
         p["N_PETALS"] = self.inputs["N_PETALS"].get_value()
         p["LOBE_OFFSET_X"] = self.inputs["LOBE_OFFSET_X_SLIDER"].get_value()
         p["LOBE_OFFSET_Y"] = self.inputs["LOBE_OFFSET_Y_SLIDER"].get_value()
@@ -848,59 +850,76 @@ class AirshipGUI(QMainWindow):
             from aerostatics import AerostatHull
             from geometry_handler import GertlerEnvelope
 
-            try:
-                # 1. Initialize hull with unit length to start optimization
-                base_env = GertlerEnvelope.from_parameters(p["ENVELOPE_PARAMS"], 1)
-                ahull = AerostatHull(
-                    envelope=base_env,
-                    additional_mass=p.get("PAYLOAD_MASS", 220),
-                    skin_density=p.get("SKIN_DENSITY", 0.75),
-                    operational_height=p.get("OPERATIONAL_HEIGHT", 4500),
-                    deployment_height=0,
-                    margin_height=500,
-                    RH=p.get("RELATIVE_HUMIDITY", 0.7),
-                    purity=p.get("GAS_PURITY", 0.97),
-                    delta_P=p.get("DELTA_P", 500),
-                    delta_T=p.get("DELTA_T", 5),
-                    gas_constant=p.get("GAS_CONSTANT", 2077)
-                )
+            # Only run optimization if the specific UI checkbox is enabled
+            if self.inputs.get("OPTIMIZE_LENGTH") and self.inputs["OPTIMIZE_LENGTH"].isChecked():
+                try:
+                    # Initialize temporary hull with unit length to solve for target lift
+                    base_env = GertlerEnvelope.from_parameters(p["ENVELOPE_PARAMS"], 1.0)
 
-                # 2. Solve for length that achieves TARGET_NET_LIFT at OPERATIONAL_HEIGHT
-                # Requires updated aerostatics.py that supports target_lift argument
-                target_lift = p.get("TARGET_NET_LIFT", 0)
-                resolved_env, _ = ahull.initialise_from_operational_altitude([1, 1e20], target_lift=target_lift)
+                    ahull = AerostatHull(
+                        envelope=base_env,
+                        additional_mass=p.get("PAYLOAD_MASS", 220),
+                        skin_density=p.get("SKIN_DENSITY", 0.75),
+                        operational_height=p.get("OPERATIONAL_HEIGHT", 4500),
+                        deployment_height=0,
+                        margin_height=500,
+                        RH=p.get("RELATIVE_HUMIDITY", 0.7),
+                        purity=p.get("GAS_PURITY", 0.97),
+                        delta_P=p.get("DELTA_P", 500),
+                        delta_T=p.get("DELTA_T", 5),
+                        gas_constant=p.get("GAS_CONSTANT", 2077),
+                        lobe_number=p.get("LOBE_NUMBER", 1),
+                        e=p.get("LOBE_OFFSET_X", 0),
+                        f=p.get("LOBE_OFFSET_Y", 0),
+                        g=p.get("LOBE_OFFSET_Z", 0),
+                        fin_rc=p.get("FIN_RC_LENGTH", 0),
+                        fin_height=p.get("FIN_HEIGHT", 0),
+                        fin_taper_ratio=p.get("FIN_TAPER_RATIO", 1),
+                        fin_thickness=p.get("FIN_THICKNESS", 0),
+                        fin_number=p.get("FIN_NUMBER", 4)
+                    )
 
-                # 3. Update the parameter dictionary with the optimized length
-                p["ENVELOPE_LENGTH"] = resolved_env.length
+                    # Find length required to achieve TARGET_NET_LIFT
+                    target_lift = p.get("TARGET_NET_LIFT", 0)
+                    resolved_env, _ = ahull.initialise_from_operational_altitude([1.0, 1000.0], target_lift=target_lift)
 
-            except Exception as e:
-                print(f"[PROCESS] Optimization bypass: {e}")
+                    # Update parameter dictionary and UI slider with the result
+                    p["ENVELOPE_LENGTH"] = resolved_env.length
+                    self.inputs["ENVELOPE_LENGTH"].set_value(resolved_env.length)
+
+                except Exception as e:
+                    print(f"[PROCESS] Aerostatic optimization failed: {e}")
+                    p["ENVELOPE_LENGTH"] = self.inputs["ENVELOPE_LENGTH"].get_value()
+            else:
+                # If optimization is unchecked, use the user-defined slider length
                 p["ENVELOPE_LENGTH"] = self.inputs["ENVELOPE_LENGTH"].get_value()
 
         # --- VOLUMETRIC MODE LOGIC (MODE 2) ---
         elif mode_id == 2:
             from geometry_handler import GertlerEnvelope
+            # Calculate length based on a specific target volume
             temp_env = GertlerEnvelope.from_parameters_volume(
                 p["ENVELOPE_PARAMS"], self.inputs["VOLUME"].get_value(),
                 int(p["ENVELOPE_RESOLUTION"]), p["LOBE_NUMBER"],
                 p["LOBE_OFFSET_X"], p["LOBE_OFFSET_Y"], p["LOBE_OFFSET_Z"]
             )
             p["ENVELOPE_LENGTH"] = temp_env.length
+            self.inputs["ENVELOPE_LENGTH"].set_value(temp_env.length)
 
-        # Finalize Fin Offset based on the final length (Standard or Optimized)
+        # Finalize Fin Offset based on the final determined length
         hull_len = p["ENVELOPE_LENGTH"]
         req_le = (p.get("FIN_AXIAL_OFFSET", 80) / 100.0) * hull_len
         max_le = hull_len - p.get("FIN_RC_LENGTH", 15) - 0.5
         p["FIN_AXIAL_OFFSET"] = min(req_le, max_le)
 
-        # Fin theta positions from text field
+        # Parse Fin angular positions
         try:
             theta_text = self.inputs["FIN_THETA_POS_TEXT"].text()
             p["FIN_THETA_POS"] = [float(a.strip()) for a in theta_text.split(',') if a.strip()]
         except:
             p["FIN_THETA_POS"] = [0, 90, 180, 270]
 
-        # Final dictionary assembly
+        # Final assembly of directory and specialized balloon parameters
         p["OUTPUT_DIRECTORY"] = target_dir
         p["SALOME_PATH"] = self.salome_path
         p["balloon_params"] = {
@@ -987,6 +1006,7 @@ class AirshipGUI(QMainWindow):
                 from geometry_handler import GertlerEnvelope
 
                 resolved_env = GertlerEnvelope.from_parameters(p["ENVELOPE_PARAMS"], p["ENVELOPE_LENGTH"])
+                # FIXED: Passing full parameters to match the updated __init__ and get_parameters
                 ahull = AerostatHull(
                     envelope=resolved_env,
                     additional_mass=p.get("PAYLOAD_MASS", 220),
@@ -996,18 +1016,23 @@ class AirshipGUI(QMainWindow):
                     margin_height=500,
                     RH=p.get("RELATIVE_HUMIDITY", 0.7),
                     purity=p.get("GAS_PURITY", 0.97),
-                    delta_P=500, delta_T=5,
+                    delta_P=p.get("DELTA_P", 500),
+                    delta_T=p.get("DELTA_T", 5),
                     gas_constant=p.get("GAS_CONSTANT", 2077),
-                    tether_density=p.get("TETHER_DENSITY", 0),
-                    fin_rc=p.get("FIN_RC_LENGTH"),                      
-                    fin_taper_ratio=p.get("FIN_TAPER_RATIO"),           
-                    fin_height=p.get("FIN_HEIGHT"),                  
-                    fin_thickness=p.get("FIN_THICKNESS")
+                    lobe_number=p.get("LOBE_NUMBER", 1),
+                    e=p.get("LOBE_OFFSET_X", 0),
+                    f=p.get("LOBE_OFFSET_Y", 0),
+                    g=p.get("LOBE_OFFSET_Z", 0),
+                    fin_rc=p.get("FIN_RC_LENGTH", 0),
+                    fin_height=p.get("FIN_HEIGHT", 0),
+                    fin_taper_ratio=p.get("FIN_TAPER_RATIO", 1),
+                    fin_thickness=p.get("FIN_THICKNESS", 0),
+                    fin_number=p.get("FIN_NUMBER", 4)
                 )
 
                 h, Ln, Lg, I, BV = ahull.get_properties(n=100)
                 self.update_aero_plots(h, Ln, Lg, I, BV)
-                self.log.append(f"[SUCCESS] Optimized Length: {p['ENVELOPE_LENGTH']:.3f} m")
+                self.log.append(f"[SUCCESS] Dashboard updated for {p['ENVELOPE_LENGTH']:.3f} m hull.")
             except Exception as e:
                 self.log.append(f"[ERROR] Aerostatic display failed: {str(e)}")
 
