@@ -138,8 +138,8 @@ class AerostatHull:
         # Tether weight per unit meter.
         self.tether_density = tether_density * tether_fraction
 
-        # Ballonet fabric mass per unit volume^2/3
-        self.ballonet_fabric_mass = BALLONET_SHAPE_FACTOR.get(ballonet_shape, 3) * ballonet_fabric_density * (np.pi * ballonet_number)**(1/3)
+        # Ballonet fabric mass per unit volume of envelope^2/3
+        self.ballonet_fabric_mass = BALLONET_SHAPE_FACTOR.get(ballonet_shape, 3) * ballonet_fabric_density * (np.pi * ballonet_number)**(1/3) * (1 - self.inflation_fraction_deploy)**(2/3)
 
         # TODO: Modify the formula to take account for FIN_TIP_ANGLE.
         self.fin_mass = 0.0393 * fin_thickness*1e-2 * fin_rc**2 * fin_height * fin_density * (fin_taper_ratio + (fin_taper_ratio - 1)**2 / 3) * fin_number
@@ -211,15 +211,15 @@ class AerostatHull:
             volume = self.envelope.volume_trilobe(e, f, g)
             surface_area = self.envelope.surface_area_trilobe(e, f, g)
 
+        # Inflation fraction varying with altitude.
+        I = self.inflation_fraction_factor * (T + self.delta_T) / (P + self.delta_P)
+        I = np.clip(I, 0, 1)
+
         total_mass = self.skin_density * surface_area + self.additional_mass + self.fin_mass + self.tether_density * h + self.ballonet_fabric_mass * volume**(2/3)
 
         RH, purity, delta_P, delta_T, gas_constant, _ = self.gas_properties
         P, T = get_atmospheric_properties(h)
         e_vap = get_vapour_pressure(T, RH)
-
-        # Inflation fraction varying with altitude.
-        I = self.inflation_fraction_factor * (T + self.delta_T) / (P + self.delta_P)
-        I = np.clip(I, 0, 1)
 
         # Total ballonet volume varying with altitude.
         BV = (1 - I) * volume
