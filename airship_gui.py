@@ -11,7 +11,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout, QGridLayout, QLabel, QLineEdit, QPushButton,
     QComboBox, QSlider, QGroupBox, QFileDialog, QTextEdit,
     QButtonGroup, QCheckBox, QMessageBox, QSplitter, QTableWidget,
-    QTableWidgetItem, QHeaderView
+    QTableWidgetItem, QHeaderView, QScrollArea
 )
 from pyvistaqt import BackgroundPlotter
 
@@ -114,8 +114,9 @@ class GenerationWorker(QObject):
 
 # --- UI COMPONENTS ---
 
-class LabeledSlider (QGroupBox):
+class LabeledSlider(QGroupBox):
     value_changed_by_user = Signal(float)
+
     def __init__(self, label, min_val, max_val, default_val, step, decimals=4, parent=None):
         super().__init__(label, parent)
         self.decimals, self.step = decimals, step
@@ -123,6 +124,9 @@ class LabeledSlider (QGroupBox):
         self._max_slider_val = int((max_val - min_val) / step)
 
         self.slider = QSlider(Qt.Orientation.Horizontal)
+        # Disable scroll behavior by ignoring wheel events
+        self.slider.wheelEvent = lambda event: event.ignore()
+
         self.slider.setMinimum(0)
         self.slider.setMaximum(self._max_slider_val)
         self.slider.setValue(int((default_val - min_val) / step))
@@ -153,9 +157,12 @@ class LabeledSlider (QGroupBox):
             clamped = max(self.min_val, min(self.max_val, val))
             self.slider.setValue(int((clamped - self.min_val) / self.step))
             self.value_changed_by_user.emit(clamped)
-        except: pass
+        except:
+            pass
 
-    def get_value(self): return float(self.value_editor.text())
+    def get_value(self):
+        return float(self.value_editor.text())
+
     def set_value(self, val):
         slider_pos = int((val - self.min_val) / self.step)
         self.slider.setValue(slider_pos)
@@ -356,7 +363,17 @@ class AirshipGUI(QMainWindow):
 
     def setup_aerostatics_tab(self):
         self.aerostatics_tab = QWidget()
-        layout = QVBoxLayout(self.aerostatics_tab)
+        tab_layout = QVBoxLayout(self.aerostatics_tab)
+
+        # Create the Scroll Area
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet("QScrollArea { border: none; background-color: #1e1e1e; }")
+
+        # Container widget for all the content
+        content_widget = QWidget()
+        content_widget.setStyleSheet("background-color: #1e1e1e;")
+        layout = QVBoxLayout(content_widget)
 
         # 1. Atmospheric Conditions
         env_grp = QGroupBox("Atmospheric Conditions")
@@ -425,6 +442,10 @@ class AirshipGUI(QMainWindow):
         layout.addWidget(mass_grp)
 
         layout.addStretch()
+
+        # Finalize the Scroll Area
+        scroll.setWidget(content_widget)
+        tab_layout.addWidget(scroll)
 
     def _toggle_tether_inputs(self, enabled):
         """Enables or disables tether-related sliders based on the checkbox state."""
