@@ -374,30 +374,46 @@ class AirshipGUI(QMainWindow):
         gl = QGridLayout(gas_grp)
         self.inputs["GAS_PURITY"] = LabeledSlider("Purity (0-1)", 0.8, 1, 0.97, 0.001, 3)
         self.inputs["GAS_CONSTANT"] = LabeledSlider("Gas Constant (He=2077)", 200, 4200, 2077, 1, 0)
+        self.inputs["DELTA_P"] = LabeledSlider("Delta P (Pa)", 0, 1000, 500, 1, 0)
+        self.inputs["DELTA_T"] = LabeledSlider("Delta T (K)", 0, 20, 5, 0.1, 1)
         gl.addWidget(self.inputs["GAS_PURITY"], 0, 0)
         gl.addWidget(self.inputs["GAS_CONSTANT"], 0, 1)
+        gl.addWidget(self.inputs["DELTA_P"], 1, 0)
+        gl.addWidget(self.inputs["DELTA_T"], 1, 1)
         layout.addWidget(gas_grp)
 
-        # 3. Mass and Structural Design
+        # 3. Ballonet Configuration
+        ballonet_grp = QGroupBox("Ballonet Configuration")
+        bl = QGridLayout(ballonet_grp)
+        self.inputs["BALLONET_NUMBER"] = LabeledSlider("Number of Ballonets", 0, 4, 2, 1, 0)
+        self.inputs["BALLONET_SHAPE"] = QComboBox()
+        self.inputs["BALLONET_SHAPE"].addItems(["THREE_QUARTER", "HEMISPHERE"])
+        self.inputs["BALLONET_FABRIC_DENSITY"] = LabeledSlider("Fabric Density (kg/m²)", 0.1, 1.0, 0.35, 0.01, 2)
+        bl.addWidget(QLabel("Ballonet Shape:"), 0, 0)
+        bl.addWidget(self.inputs["BALLONET_SHAPE"], 0, 1)
+        bl.addWidget(self.inputs["BALLONET_NUMBER"], 1, 0)
+        bl.addWidget(self.inputs["BALLONET_FABRIC_DENSITY"], 1, 1)
+        layout.addWidget(ballonet_grp)
+
+        # 4. Mass and Structural Design
         mass_grp = QGroupBox("Mass and Structural Design")
         ml = QGridLayout(mass_grp)
         self.inputs["SKIN_DENSITY"] = LabeledSlider("Skin Density (kg/m²)", 0.1, 2.0, 0.75, 0.01, 2)
         self.inputs["PAYLOAD_MASS"] = LabeledSlider("Payload/Add. Mass (kg)", 0, 5000, 220, 1, 1)
 
-        # Tether Controls
+        # Tether Mass Controls
         self.inputs["INCLUDE_TETHER"] = QCheckBox("INCLUDE TETHER MASS")
         self.inputs["INCLUDE_TETHER"].setChecked(True)
         self.inputs["INCLUDE_TETHER"].setStyleSheet("color: #00BFFF; font-weight: bold;")
-
-        # NEW: Connect the checkbox to the toggle function
         self.inputs["INCLUDE_TETHER"].toggled.connect(self._toggle_tether_inputs)
 
         self.inputs["TETHER_DENSITY"] = LabeledSlider("Tether Density (kg/m)", 0, 5, 0.1, 0.01, 2)
         self.inputs["TETHER_FRACTION"] = LabeledSlider("Tether Fraction (0-1)", 0, 1, 1.0, 0.01, 2)
-
         self.inputs["TARGET_NET_LIFT"] = LabeledSlider("Target Net Lift (N)", -1000, 5000, 0, 1, 1)
+
         self.inputs["OPTIMIZE_LENGTH"] = QCheckBox("OPTIMIZE LENGTH FOR TARGET LIFT")
         self.inputs["OPTIMIZE_LENGTH"].setChecked(True)
+        self.inputs["OPTIMIZE_LENGTH"].setFont(QFont("Arial", 10, QFont.Bold))
 
         ml.addWidget(self.inputs["SKIN_DENSITY"], 0, 0)
         ml.addWidget(self.inputs["PAYLOAD_MASS"], 0, 1)
@@ -682,12 +698,9 @@ class AirshipGUI(QMainWindow):
             self.run_process()
 
     def run_instant_aerostatics(self):
-        """Performs analytical performance calculations (Bypassing Geometry Export)."""
         self.log.append("[PROCESS] Running Analytical Aerostatic Solver...")
         try:
-            target_dir = self.current_session_folder
-            p = self.get_parameters(target_dir)
-
+            p = self.get_parameters(self.current_session_folder)
             from aerostatics import AerostatHull
             from geometry_handler import GertlerEnvelope
 
@@ -695,30 +708,28 @@ class AirshipGUI(QMainWindow):
 
             ahull = AerostatHull(
                 envelope=resolved_env,
-                additional_mass=p.get("PAYLOAD_MASS", 220),
-                skin_density=p.get("SKIN_DENSITY", 0.75),
-                operational_height=p.get("OPERATIONAL_HEIGHT", 4500),
+                skin_density=p["SKIN_DENSITY"],
+                additional_mass=p["PAYLOAD_MASS"],
+                operational_height=p["OPERATIONAL_HEIGHT"],
                 deployment_height=0,
-                margin_height=500,
-                RH=p.get("RELATIVE_HUMIDITY", 0.7),
-                purity=p.get("GAS_PURITY", 0.97),
-                delta_P=p.get("DELTA_P", 500),
-                delta_T=p.get("DELTA_T", 5),
-                gas_constant=p.get("GAS_CONSTANT", 2077),
-                lobe_number=p.get("LOBE_NUMBER", 1),
-                e=p.get("LOBE_OFFSET_X", 0),
-                f=p.get("LOBE_OFFSET_Y", 0),
-                g=p.get("LOBE_OFFSET_Z", 0),
-                # Pass tether data
-                tether_density=p.get("TETHER_DENSITY", 0),
-                tether_fraction=p.get("TETHER_FRACTION", 1.0)
+                margin_height=p["MARGIN_HEIGHT"],
+                RH=p["RELATIVE_HUMIDITY"],
+                purity=p["GAS_PURITY"],
+                delta_P=p["DELTA_P"],
+                delta_T=p["DELTA_T"],
+                gas_constant=p["GAS_CONSTANT"],
+                lobe_number=p["LOBE_NUMBER"],
+                e=p["LOBE_OFFSET_X"], f=p["LOBE_OFFSET_Y"], g=p["LOBE_OFFSET_Z"],
+                ballonet_number=int(p["BALLONET_NUMBER"]),
+                ballonet_shape=p["BALLONET_SHAPE"],
+                ballonet_fabric_density=p["BALLONET_FABRIC_DENSITY"],
+                tether_density=p["TETHER_DENSITY"],
+                tether_fraction=p["TETHER_FRACTION"]
             )
 
-            # Use the include_tether flag in properties calculation
-            h, Ln, Lg, I, BV = ahull.get_properties(n=100, include_tether=p.get("INCLUDE_TETHER"))
+            h, Ln, Lg, I, BV = ahull.get_properties(n=100, include_tether=p["INCLUDE_TETHER"])
             self.last_aero_data = (h, Ln, Lg, I, BV)
             self.update_aero_plots(h, Ln, Lg, I, BV)
-
             self.log.append(f"[SUCCESS] Solver complete. Hull Length: {p['ENVELOPE_LENGTH']:.3f} m")
         except Exception as e:
             self.log.append(f"[ERROR] Solver failed: {str(e)}")
@@ -822,7 +833,7 @@ class AirshipGUI(QMainWindow):
         Handles analytical optimization for Aerostatic mode and length scaling for Volumetric mode.
         """
         p = {}
-        # Comprehensive list of all slider keys used across all tabs, updated with Tether parameters
+        # Comprehensive list of all slider keys used across all tabs
         all_keys = [
             "ENVELOPE_LENGTH", "ENVELOPE_RESOLUTION", "m1", "r0", "r1", "cp", "l2d",
             "FIN_AXIAL_OFFSET", "FIN_RC_LENGTH", "FIN_HEIGHT", "FIN_THICKNESS",
@@ -831,7 +842,8 @@ class AirshipGUI(QMainWindow):
             "BULGE_AMPLITUDE", "BULGE_POWER", "GORE_AMPLITUDE", "GORE_FADE_POWER",
             "OPERATIONAL_HEIGHT", "RELATIVE_HUMIDITY", "GAS_PURITY", "GAS_CONSTANT",
             "DELTA_P", "DELTA_T", "SKIN_DENSITY", "PAYLOAD_MASS", "TARGET_NET_LIFT",
-            "TETHER_DENSITY", "TETHER_FRACTION"  # NEW: Added for optional tether logic
+            "TETHER_DENSITY", "TETHER_FRACTION", "BALLONET_NUMBER",
+            "BALLONET_FABRIC_DENSITY", "MARGIN_HEIGHT"
         ]
 
         # Extract numerical values from sliders
@@ -839,8 +851,9 @@ class AirshipGUI(QMainWindow):
             if key in self.inputs:
                 p[key] = self.inputs[key].get_value()
 
-        # Extract fixed/text, multi-lobe inputs, and the new tether toggle
-        p["INCLUDE_TETHER"] = self.inputs["INCLUDE_TETHER"].isChecked() # NEW: Optionality toggle
+        # Capture checkbox, combo box, and multi-lobe inputs
+        p["INCLUDE_TETHER"] = self.inputs["INCLUDE_TETHER"].isChecked()
+        p["BALLONET_SHAPE"] = self.inputs["BALLONET_SHAPE"].currentText()
         p["N_PETALS"] = self.inputs["N_PETALS"].get_value()
         p["LOBE_OFFSET_X"] = self.inputs["LOBE_OFFSET_X_SLIDER"].get_value()
         p["LOBE_OFFSET_Y"] = self.inputs["LOBE_OFFSET_Y_SLIDER"].get_value()
@@ -866,23 +879,23 @@ class AirshipGUI(QMainWindow):
 
                     ahull = AerostatHull(
                         envelope=base_env,
-                        additional_mass=p.get("PAYLOAD_MASS", 220),
-                        skin_density=p.get("SKIN_DENSITY", 0.75),
-                        operational_height=p.get("OPERATIONAL_HEIGHT", 4500),
+                        skin_density=p["SKIN_DENSITY"],
+                        additional_mass=p["PAYLOAD_MASS"],
+                        operational_height=p["OPERATIONAL_HEIGHT"],
                         deployment_height=0,
-                        margin_height=500,
-                        RH=p.get("RELATIVE_HUMIDITY", 0.7),
-                        purity=p.get("GAS_PURITY", 0.97),
-                        delta_P=p.get("DELTA_P", 500),
-                        delta_T=p.get("DELTA_T", 5),
-                        gas_constant=p.get("GAS_CONSTANT", 2077),
-                        lobe_number=p.get("LOBE_NUMBER", 1),
-                        e=p.get("LOBE_OFFSET_X", 0),
-                        f=p.get("LOBE_OFFSET_Y", 0),
-                        g=p.get("LOBE_OFFSET_Z", 0),
-                        # Passing tether parameters to the solver
-                        tether_density=p.get("TETHER_DENSITY", 0) if p["INCLUDE_TETHER"] else 0,
-                        tether_fraction=p.get("TETHER_FRACTION", 1.0),
+                        margin_height=p["MARGIN_HEIGHT"],
+                        RH=p["RELATIVE_HUMIDITY"],
+                        purity=p["GAS_PURITY"],
+                        delta_P=p["DELTA_P"],
+                        delta_T=p["DELTA_T"],
+                        gas_constant=p["GAS_CONSTANT"],
+                        lobe_number=p["LOBE_NUMBER"],
+                        e=p["LOBE_OFFSET_X"], f=p["LOBE_OFFSET_Y"], g=p["LOBE_OFFSET_Z"],
+                        ballonet_number=int(p["BALLONET_NUMBER"]),
+                        ballonet_shape=p["BALLONET_SHAPE"],
+                        ballonet_fabric_density=p["BALLONET_FABRIC_DENSITY"],
+                        tether_density=p["TETHER_DENSITY"] if p["INCLUDE_TETHER"] else 0,
+                        tether_fraction=p["TETHER_FRACTION"],
                         fin_rc=p.get("FIN_RC_LENGTH", 0),
                         fin_height=p.get("FIN_HEIGHT", 0),
                         fin_taper_ratio=p.get("FIN_TAPER_RATIO", 1),
