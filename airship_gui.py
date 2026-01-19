@@ -22,6 +22,7 @@ from geometry_handler import STANDARD_ENVELOPES
 
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
+import numpy as np
 import matplotlib.pyplot as plt
 
 
@@ -719,17 +720,22 @@ class AirshipGUI(QMainWindow):
             self.run_process()
 
     def run_instant_aerostat(self):
-        """Performs analytical performance calculations and logs design parameters."""
+        """
+        Performs analytical performance calculations by initializing the AerostatHull
+        once and handling optimization and property retrieval in a single pass.
+        """
         self.log.append("[PROCESS] Running Analytical Aerostat Solver...")
         try:
+            # 1. Gather raw parameters from UI
             target_dir = self.current_session_folder
             p = self.get_parameters(target_dir)
 
             from aerostat import AerostatHull
             from geometry_handler import GertlerEnvelope
 
-            # 1. Initialize Hull and Geometry
+            # 2. Initialize the Base Hull ONCE
             resolved_env = GertlerEnvelope.from_parameters(p["ENVELOPE_PARAMS"], p["ENVELOPE_LENGTH"])
+
             ahull = AerostatHull(
                 envelope=resolved_env,
                 skin_density=p["SKIN_DENSITY"],
@@ -748,38 +754,48 @@ class AirshipGUI(QMainWindow):
                 ballonet_shape=p["BALLONET_SHAPE"],
                 ballonet_fabric_density=p["BALLONET_FABRIC_DENSITY"],
                 tether_density=p["TETHER_DENSITY"],
-                tether_fraction=p["TETHER_FRACTION"]
+                tether_fraction=p["TETHER_FRACTION"],
+                fin_rc=p.get("FIN_RC_LENGTH", 0),
+                fin_height=p.get("FIN_HEIGHT", 0),
+                fin_taper_ratio=p.get("FIN_TAPER_RATIO", 1),
+                fin_thickness=p.get("FIN_THICKNESS", 0),
+                fin_number=p.get("FIN_NUMBER", 4)
             )
 
-            # 2. Get performance arrays
+            # 3. Handle Optimization (If Checked)
+            if self.inputs.get("OPTIMIZE_LENGTH") and self.inputs["OPTIMIZE_LENGTH"].isChecked():
+                target_lift = p.get("TARGET_NET_LIFT", 0)
+                optimized_env, convergence_error = ahull.initialise_from_operational_altitude(
+                    [1.0, 1e10], target_lift=target_lift
+                )
+
+                # Sync the UI slider so the user sees the calculated length
+                self.inputs["ENVELOPE_LENGTH"].set_value(optimized_env.length)
+                self.log.append(f"[INFO] Optimized Length: {optimized_env.length:.3f} m")
+
+            # 4. Get performance arrays (Using the same 'ahull' instance)
             h, Ln, Lg, I, BV = ahull.get_properties(n=100, include_tether=p["INCLUDE_TETHER"])
 
-            # Index at which operational height is present.
-            operational_index = h.searchsorted(ahull.operational_altitude)
+            # 5. RESTORED DESIGN PARAMETER STATUS MESSAGES
+            operational_index = (np.abs(h - ahull.operational_altitude)).argmin()
 
-            # 3. Calculate Final Design Parameters for Logging
-            # Geometry properties
             vol = ahull.envelope.volume()
             surf_area = ahull.envelope.surface_area()
             max_rad = ahull.envelope.diameter / 2.0
-
-            # Mass properties
             env_mass = surf_area * ahull.skin_density
             ballonet_fabric_mass = ahull.ballonet_fabric_mass * (vol ** (2/3))
             tether_mass_op = (ahull.tether_density * p["OPERATIONAL_HEIGHT"]) if p["INCLUDE_TETHER"] else 0
 
-            # Gas mass at operational altitude
-            # P and T at operational height (index -1 of the generated arrays)
-            P_op, T_op = h[operational_index], I[operational_index] # Note: I is the array of inflation fractions
+            # Calculate Gas Mass at Op Alt
+            P_op, T_op = h[operational_index], I[operational_index]
             gas_mass_op = (p["GAS_PURITY"] * (P_op + p["DELTA_P"]) / (p["GAS_CONSTANT"] * (T_op + p["DELTA_T"]))) * I[operational_index] * vol
 
-            # Ballonet Radius (Simplified as sphere of equivalent volume)
-            # BV[-1] is ballonet volume at operational altitude
+            # Ballonet Radius (Equivalent sphere)
             v_ballonet_total = BV[operational_index]
             v_per_ballonet = v_ballonet_total / max(p["BALLONET_NUMBER"], 1)
-            ballonet_radius = (3 * v_per_ballonet / (4 * 3.14159)) ** (1/3)
+            ballonet_radius = (3 * v_per_ballonet / (4 * np.pi)) ** (1/3)
 
-            # 4. Log to Status Logger
+            # Log results to the Console
             print("\n" + "="*30)
             print(" FINAL CONSISTENT DESIGN PARAMETERS")
             print("="*30)
@@ -799,13 +815,13 @@ class AirshipGUI(QMainWindow):
             print(f"Dep Inflation Fraction: {ahull.inflation_fraction_deploy*100:.2f} %")
             print("="*30 + "\n")
 
-            # 5. Update GUI Plots
+            # 6. Update GUI Plots and Cache Data
             self.last_aero_data = (h, Ln, Lg, I, BV)
             self.update_aero_plots(h, Ln, Lg, I, BV)
-            self.log.append(f"[SUCCESS] Design parameters calculated for {p['ENVELOPE_LENGTH']:.3f}m hull.")
+            self.log.append(f"[SUCCESS] Design parameters calculated for {ahull.envelope.length:.3f}m hull.")
 
         except Exception as e:
-            self.log.append(f"[ERROR] Aerostat logging failed: {str(e)}")
+            self.log.append(f"[ERROR] Aerostat solver failed: {str(e)}")
 
     def _auto_update_props(self):
         """Refreshes geometric property labels based on current slider states."""
@@ -903,10 +919,10 @@ class AirshipGUI(QMainWindow):
     def get_parameters(self, target_dir):
         """
         Gathers all current GUI inputs into a single parameters dictionary.
-        Handles analytical optimization for Aerostat mode and length scaling for Volumetric mode.
+        Optimization logic has been moved to run_instant_aerostat to prevent
+        redundant class initialization.
         """
         p = {}
-        # Comprehensive list of all slider keys used across all tabs
         all_keys = [
             "ENVELOPE_LENGTH", "ENVELOPE_RESOLUTION", "m1", "r0", "r1", "cp", "l2d",
             "FIN_AXIAL_OFFSET", "FIN_RC_LENGTH", "FIN_HEIGHT", "FIN_THICKNESS",
@@ -919,12 +935,10 @@ class AirshipGUI(QMainWindow):
             "BALLONET_FABRIC_DENSITY", "MARGIN_HEIGHT"
         ]
 
-        # Extract numerical values from sliders
         for key in all_keys:
             if key in self.inputs:
                 p[key] = self.inputs[key].get_value()
 
-        # Capture checkbox, combo box, and multi-lobe inputs
         p["INCLUDE_TETHER"] = self.inputs["INCLUDE_TETHER"].isChecked()
         p["BALLONET_SHAPE"] = self.inputs["BALLONET_SHAPE"].currentText()
         p["N_PETALS"] = self.inputs["N_PETALS"].get_value()
@@ -937,64 +951,9 @@ class AirshipGUI(QMainWindow):
         p["INCLUDE_FINS"] = self.inputs["INCLUDE_FINS"].isChecked()
         p["ENVELOPE_PARAMS"] = (p["m1"], p["r0"], p["r1"], p["cp"], p["l2d"])
 
-        mode_id = self.mode_button_group.checkedId()
-
-        # --- AEROSTAT OPTIMIZATION LOGIC (MODE 4) ---
-        if mode_id == 4:
-            from aerostat import AerostatHull
+        # Handle Volumetric scaling for geometry definition
+        if self.mode_button_group.checkedId() == 2:
             from geometry_handler import GertlerEnvelope
-
-            # Only run optimization if the specific UI checkbox is enabled
-            if self.inputs.get("OPTIMIZE_LENGTH") and self.inputs["OPTIMIZE_LENGTH"].isChecked():
-                try:
-                    # Initialize temporary hull with unit length to solve for target lift
-                    base_env = GertlerEnvelope.from_parameters(p["ENVELOPE_PARAMS"], 1.0)
-
-                    ahull = AerostatHull(
-                        envelope=base_env,
-                        skin_density=p["SKIN_DENSITY"],
-                        additional_mass=p["PAYLOAD_MASS"],
-                        operational_height=p["OPERATIONAL_HEIGHT"],
-                        deployment_height=0,
-                        margin_height=p["MARGIN_HEIGHT"],
-                        RH=p["RELATIVE_HUMIDITY"],
-                        purity=p["GAS_PURITY"],
-                        delta_P=p["DELTA_P"],
-                        delta_T=p["DELTA_T"],
-                        gas_constant=p["GAS_CONSTANT"],
-                        lobe_number=p["LOBE_NUMBER"],
-                        e=p["LOBE_OFFSET_X"], f=p["LOBE_OFFSET_Y"], g=p["LOBE_OFFSET_Z"],
-                        ballonet_number=int(p["BALLONET_NUMBER"]),
-                        ballonet_shape=p["BALLONET_SHAPE"],
-                        ballonet_fabric_density=p["BALLONET_FABRIC_DENSITY"],
-                        tether_density=p["TETHER_DENSITY"] if p["INCLUDE_TETHER"] else 0,
-                        tether_fraction=p["TETHER_FRACTION"],
-                        fin_rc=p.get("FIN_RC_LENGTH", 0),
-                        fin_height=p.get("FIN_HEIGHT", 0),
-                        fin_taper_ratio=p.get("FIN_TAPER_RATIO", 1),
-                        fin_thickness=p.get("FIN_THICKNESS", 0),
-                        fin_number=p.get("FIN_NUMBER", 4)
-                    )
-
-                    # Find length required to achieve TARGET_NET_LIFT
-                    target_lift = p.get("TARGET_NET_LIFT", 0)
-                    resolved_env, _ = ahull.initialise_from_operational_altitude([1.0, 1e10], target_lift=target_lift)
-
-                    # Update parameter dictionary and UI slider with the result
-                    p["ENVELOPE_LENGTH"] = resolved_env.length
-                    self.inputs["ENVELOPE_LENGTH"].set_value(resolved_env.length)
-
-                except Exception as e:
-                    print(f"[PROCESS] Aerostat optimization failed: {e}")
-                    p["ENVELOPE_LENGTH"] = self.inputs["ENVELOPE_LENGTH"].get_value()
-            else:
-                # If optimization is unchecked, use the user-defined slider length
-                p["ENVELOPE_LENGTH"] = self.inputs["ENVELOPE_LENGTH"].get_value()
-
-        # --- VOLUMETRIC MODE LOGIC (MODE 2) ---
-        elif mode_id == 2:
-            from geometry_handler import GertlerEnvelope
-            # Calculate length based on a specific target volume
             temp_env = GertlerEnvelope.from_parameters_volume(
                 p["ENVELOPE_PARAMS"], self.inputs["VOLUME"].get_value(),
                 int(p["ENVELOPE_RESOLUTION"]), p["LOBE_NUMBER"],
@@ -1003,20 +962,18 @@ class AirshipGUI(QMainWindow):
             p["ENVELOPE_LENGTH"] = temp_env.length
             self.inputs["ENVELOPE_LENGTH"].set_value(temp_env.length)
 
-        # Finalize Fin Offset based on the final determined length
+        # Determine Fin axial position based on length
         hull_len = p["ENVELOPE_LENGTH"]
         req_le = (p.get("FIN_AXIAL_OFFSET", 80) / 100.0) * hull_len
         max_le = hull_len - p.get("FIN_RC_LENGTH", 15) - 0.5
         p["FIN_AXIAL_OFFSET"] = min(req_le, max_le)
 
-        # Parse Fin angular positions
         try:
             theta_text = self.inputs["FIN_THETA_POS_TEXT"].text()
             p["FIN_THETA_POS"] = [float(a.strip()) for a in theta_text.split(',') if a.strip()]
         except:
             p["FIN_THETA_POS"] = [0, 90, 180, 270]
 
-        # Final assembly of directory and specialized balloon parameters
         p["OUTPUT_DIRECTORY"] = target_dir
         p["SALOME_PATH"] = self.salome_path
         p["balloon_params"] = {
@@ -1091,49 +1048,9 @@ class AirshipGUI(QMainWindow):
         self.btn_run.setText("RUN GENERATION")
 
         if os.path.exists(stl_path):
-            self.plotter.clear()
-            mesh = pv.read(stl_path)
-            self.plotter.add_mesh(mesh, color="#00BFFF", show_edges=True, edge_color="#333333", opacity=0.8)
-            self.plotter.reset_camera()
+            self._update_3d_view(stl_path)
 
-        if self.mode_button_group.checkedId() == 4:
-            try:
-                p = self.get_parameters(self.current_session_folder)
-                from aerostat import AerostatHull
-                from geometry_handler import GertlerEnvelope
-
-                resolved_env = GertlerEnvelope.from_parameters(p["ENVELOPE_PARAMS"], p["ENVELOPE_LENGTH"])
-                # FIXED: Passing full parameters to match the updated __init__ and get_parameters
-                ahull = AerostatHull(
-                    envelope=resolved_env,
-                    additional_mass=p.get("PAYLOAD_MASS", 220),
-                    skin_density=p.get("SKIN_DENSITY", 0.75),
-                    operational_height=p.get("OPERATIONAL_HEIGHT", 4500),
-                    deployment_height=0,
-                    margin_height=500,
-                    RH=p.get("RELATIVE_HUMIDITY", 0.7),
-                    purity=p.get("GAS_PURITY", 0.97),
-                    delta_P=p.get("DELTA_P", 500),
-                    delta_T=p.get("DELTA_T", 5),
-                    gas_constant=p.get("GAS_CONSTANT", 2077),
-                    lobe_number=p.get("LOBE_NUMBER", 1),
-                    e=p.get("LOBE_OFFSET_X", 0),
-                    f=p.get("LOBE_OFFSET_Y", 0),
-                    g=p.get("LOBE_OFFSET_Z", 0),
-                    fin_rc=p.get("FIN_RC_LENGTH", 0),
-                    fin_height=p.get("FIN_HEIGHT", 0),
-                    fin_taper_ratio=p.get("FIN_TAPER_RATIO", 1),
-                    fin_thickness=p.get("FIN_THICKNESS", 0),
-                    fin_number=p.get("FIN_NUMBER", 4)
-                )
-
-                h, Ln, Lg, I, BV = ahull.get_properties(n=100)
-                self.update_aero_plots(h, Ln, Lg, I, BV)
-                self.log.append(f"[SUCCESS] Dashboard updated for {p['ENVELOPE_LENGTH']:.3f} m hull.")
-            except Exception as e:
-                self.log.append(f"[ERROR] Aerostat display failed: {str(e)}")
-
-        elif matrix is not None:
+        if matrix is not None:
             for r in range(6):
                 for c in range(6):
                     self.matrix_table.setItem(r, c, QTableWidgetItem(f"{matrix[r,c]:.4f}"))
@@ -1173,54 +1090,106 @@ class AirshipGUI(QMainWindow):
             if k in self.inputs: self.inputs[k].set_value(v)
 
     def reset_to_defaults(self):
-        # 1. Gertler Geometry Sliders (Based on current dropdown preset)
-        current_preset = self.preset_combo.currentText()
-        vals = STANDARD_ENVELOPES[current_preset]
-        for k, v in zip(["m1", "r0", "r1", "cp", "l2d"], vals):
-            if k in self.inputs: self.inputs[k].set_value(v)
+        """
+        Resets all sliders across all tabs relative to current selections.
+        Uses signal blocking to prevent the UI from freezing and ensures
+        Fin Sweep and Configuration inputs are explicitly reset.
+        """
+        from geometry_handler import STANDARD_ENVELOPES
 
-        # 2. General Dimensions
-        self.inputs["ENVELOPE_LENGTH"].set_value(100.0)
-        self.inputs["VOLUME"].set_value(5000.0)
-        self.inputs["ENVELOPE_RESOLUTION"].set_value(150)
-        self.inputs["N_PETALS"].set_value(8)
+        # 1. Capture current state to preserve radio buttons and dropdowns
+        current_mode_id = self.mode_button_group.checkedId()
+        current_lobe_id = self.lobe_button_group.checkedId()
+        current_shape_name = self.preset_combo.currentText()
 
-        # 3. Super Pressure Balloon Sliders (Mode 3)
-        balloon_keys = {
-            "ASPECT_RATIO": 1.0, "GORE_AMPLITUDE": 0.05,
-            "THETA_RES": 400, "PHI_RES": 600,
-            "BULGE_AMPLITUDE": 0.0, "BULGE_POWER": 1.0, "GORE_FADE_POWER": 4.0
-        }
-        for key, val in balloon_keys.items():
-            if key in self.inputs: self.inputs[key].set_value(val)
+        # 2. BLOCK ALL UI SIGNALS TO PREVENT FREEZE
+        for input_widget in self.inputs.values():
+            if hasattr(input_widget, 'blockSignals'):
+                input_widget.blockSignals(True)
 
-        # 4. Aerostat Sliders (Mode 4)
-        aero_keys = {
-            "OPERATIONAL_HEIGHT": 4500.0, "RELATIVE_HUMIDITY": 0.7,
-            "GAS_PURITY": 0.97, "GAS_CONSTANT": 2077.0,
-            "DELTA_P": 500.0, "DELTA_T": 5.0,
-            "SKIN_DENSITY": 0.75, "PAYLOAD_MASS": 220.0, "TARGET_NET_LIFT": 0.0
-        }
-        for key, val in aero_keys.items():
-            if key in self.inputs: self.inputs[key].set_value(val)
+        try:
+            # 3. Reset sliders to defaults of the CURRENTLY selected shape
+            shape_vals = STANDARD_ENVELOPES.get(current_shape_name, STANDARD_ENVELOPES["NPL"])
+            keys = ["m1", "r0", "r1", "cp", "l2d"]
+            for k, v in zip(keys, shape_vals):
+                if k in self.inputs:
+                    self.inputs[k].set_value(v)
 
-        # 5. Multi-Lobe & Fin Sliders
-        for l_key in ["LOBE_OFFSET_X_SLIDER", "LOBE_OFFSET_Y_SLIDER", "LOBE_OFFSET_Z_SLIDER"]:
-            if l_key in self.inputs: self.inputs[l_key].set_value(10.0)
+            # Basic Geometry Defaults
+            self.inputs["ENVELOPE_LENGTH"].set_value(100.0)
+            self.inputs["VOLUME"].set_value(5000.0)
+            self.inputs["ENVELOPE_RESOLUTION"].set_value(150)
+            self.inputs["N_PETALS"].set_value(8)
 
-        # 6. Clear Output Displays
-        self.log.clear()
-        self.log.append("Status: Ready (Sliders Reset)")
-        self.matrix_table.clearContents()
-        if hasattr(self, 'fig'):
-            self.fig.clear()
-            self.canvas.draw()
-        self.plotter.clear()
-        self.inputs["FINAL_OBJECT_NAME"].setText("Airship_Project")
+            # 4. RESET SUPER PRESSURE BALLOON TAB
+            balloon_defaults = {
+                "ASPECT_RATIO": 1.0, "GORE_AMPLITUDE": 0.05, "GORE_FADE_POWER": 4.0,
+                "BULGE_AMPLITUDE": 0.0, "BULGE_POWER": 1.0, "THETA_RES": 400, "PHI_RES": 600
+            }
+            for key, val in balloon_defaults.items():
+                if key in self.inputs:
+                    self.inputs[key].set_value(val)
 
-        # Update analytical properties labels
-        if hasattr(self, '_auto_update_props'):
+            # 5. RESET FIN DESIGN TAB (Dimensions & Sweep Configuration)
+            fin_defaults = {
+                "FIN_RC_LENGTH": 15.5,
+                "FIN_HEIGHT": 15.5,
+                "FIN_THICKNESS": 10.0,
+                "FIN_TAPER_RATIO": 0.55,
+                "FIN_AXIAL_OFFSET": 80.0,
+                "FIN_SECTION_RESOLUTION": 60,
+                "FIN_SWEEP_ANGLE": 0.0,      # Explicitly reset sweep
+                "FIN_TIP_ANGLE": 15.0,       # Explicitly reset tip angle
+                "FIN_NUMBER": 4              # Explicitly reset number of fins
+            }
+            for key, val in fin_defaults.items():
+                if key in self.inputs:
+                    self.inputs[key].set_value(val)
+
+            # Reset Fin Angular Positions and Checkbox
+            self.inputs["FIN_THETA_POS_TEXT"].setText("0.0, 90.0, 180.0, 270.0")
+            self.inputs["INCLUDE_FINS"].setChecked(True)
+
+            # 6. Reset Aerostat and Multilobe Sliders
+            aero_defaults = {
+                "OPERATIONAL_HEIGHT": 4500.0, "RELATIVE_HUMIDITY": 0.7, "MARGIN_HEIGHT": 500.0,
+                "GAS_PURITY": 0.97, "GAS_CONSTANT": 2077.0, "DELTA_P": 500.0, "DELTA_T": 5.0,
+                "BALLONET_NUMBER": 2, "BALLONET_FABRIC_DENSITY": 0.35, "SKIN_DENSITY": 0.75,
+                "PAYLOAD_MASS": 220.0, "TETHER_DENSITY": 0.1, "TETHER_FRACTION": 1.0, "TARGET_NET_LIFT": 0.0
+            }
+            for key, val in aero_defaults.items():
+                if key in self.inputs: self.inputs[key].set_value(val)
+
+            lobe_offsets = {
+                "LOBE_OFFSET_X_SLIDER": 10.0, "LOBE_OFFSET_Y_SLIDER": 10.0, "LOBE_OFFSET_Z_SLIDER": 10.0,
+                "SHEET_LENGTH_RATIO_SLIDER": 0.5
+            }
+            for key, val in lobe_offsets.items():
+                if key in self.inputs: self.inputs[key].set_value(val)
+
+            # 7. Clear Output Tab Displays
+            self.inputs["FINAL_OBJECT_NAME"].setText("Airship_Project")
+            self.log.clear()
+            for key in self.prop_outputs: self.prop_outputs[key].setText("0.0000")
+            self.matrix_table.clearContents()
+            self.plotter.clear()
+            if hasattr(self, 'fig'):
+                self.fig.clear()
+                self.canvas.draw()
+
+        finally:
+            # 8. Unblock signals and update UI once
+            for input_widget in self.inputs.values():
+                if hasattr(input_widget, 'blockSignals'):
+                    input_widget.blockSignals(False)
+
+            # Restore radio selections
+            self.mode_button_group.button(current_mode_id).setChecked(True)
+            self.lobe_button_group.button(current_lobe_id).setChecked(True)
+
+            self.refresh_tabs()
             self._auto_update_props()
+            self.log.append(f"Status: Reset successful for {current_shape_name}.")
 
     def _update_navigation_buttons(self):
         idx = self.tab_widget.currentIndex()
