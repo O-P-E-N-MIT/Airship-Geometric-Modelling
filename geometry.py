@@ -159,14 +159,17 @@ class AirshipGeometry:
 
         # 1. Calculate Hull Base Properties
         if lobe_number == 1:
-            vol, surf, top, side = (envelope.volume(), envelope.surface_area(),
-                                    envelope.side_projected_area(), envelope.side_projected_area())
+            vol, surf, top, side, cv = (envelope.volume(), envelope.surface_area(),
+                                    envelope.side_projected_area(), envelope.side_projected_area(),
+                                    envelope.cv())
         elif lobe_number == 2:
-            vol, surf, top, side = (envelope.volume_bilobe(f), envelope.surface_area_bilobe(f),
-                                    envelope.top_projected_area_bilobe(f), envelope.side_projected_area())
+            vol, surf, top, side, cv = (envelope.volume_bilobe(f), envelope.surface_area_bilobe(f),
+                                    envelope.top_projected_area_bilobe(f), envelope.side_projected_area(),
+                                    envelope.cv_bilobe(f))
         else:
-            vol, surf, top, side = (envelope.volume_trilobe(e, f, g), envelope.surface_area_trilobe(e, f, g),
-                                    envelope.top_projected_area_trilobe(e, f, g), envelope.side_projected_area_trilobe(e, f, g))
+            vol, surf, top, side, cv = (envelope.volume_trilobe(e, f, g), envelope.surface_area_trilobe(e, f, g),
+                                    envelope.top_projected_area_trilobe(e, f, g), envelope.side_projected_area_trilobe(e, f, g),
+                                    envelope.cv_trilobe(e, f, g))
 
         # 2. Add Fin Contributions (if enabled)
         if self.params.get("INCLUDE_FINS", True):
@@ -192,7 +195,7 @@ class AirshipGeometry:
             side += (fin_planform_area * 2)
             top += (fin_planform_area * 2)
 
-        return vol, surf, top, side
+        return vol, surf, top, side, cv
 
 def plot_and_save_profile(params, length, nx, num_petals, nc, filename, shape_name="Airship_Geometry"):
     """Generates the DAT file and profile plot for the developed gore/petal."""

@@ -848,12 +848,13 @@ class AirshipGUI(QMainWindow):
             try:
                 from geometry import AirshipGeometry
                 geom = AirshipGeometry(params, self.salome_path)
-                vol, surf, top, side = geom.geometric_properties()
+                vol, surf, top, side, cv = geom.geometric_properties()
                 self.prop_outputs["vol"].setText(f"{vol:.4f}")
                 self.prop_outputs["surf"].setText(f"{surf:.4f}")
                 self.prop_outputs["top_area"].setText(f"{top:.4f}")
                 self.prop_outputs["side_area"].setText(f"{side:.4f}")
-            except Exception:
+            except Exception as e:
+                print(e)
                 pass
 
     def _update_property_display(self, params):
@@ -861,7 +862,7 @@ class AirshipGUI(QMainWindow):
         try:
             from geometry import AirshipGeometry
             geom = AirshipGeometry(params, self.salome_path)
-            vol, surf, top, side = geom.geometric_properties()
+            vol, surf, top, side, cv = geom.geometric_properties()
 
             self.prop_outputs["vol"].setText(f"{vol:.4f}")
             self.prop_outputs["surf"].setText(f"{surf:.4f}")

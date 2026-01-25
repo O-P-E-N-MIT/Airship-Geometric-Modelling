@@ -105,6 +105,11 @@ class GertlerEnvelope:
         X, R = self.points(tuples=False)
         return 2 * np.trapezoid(R, X)
     
+    # Returns center of volume of the envelope.
+    def cv (self):
+        X, R = self.points(tuples=False)
+        return np.trapezoid(X * np.pi * R**2, X) / self.volume(), 0
+    
     # Returns the volume of a bilobed envelope.
     #
     # f = Distance of the extreme lobe from X axis.
@@ -138,6 +143,18 @@ class GertlerEnvelope:
         X, R = self.points(tuples=False)
         L = R + np.minimum(R, f)
         return 2 * np.trapezoid(L, X)
+    
+    # Returns the center of volume of bilobe.
+    def cv_bilobe (self, f):
+        if f == 0: return self.cv()
+
+        X, R = self.points(tuples=False)    
+        A = 2 * np.pi * R**2
+
+        r = R[f < R]
+        A[f < R] -= 2 * (r**2 * np.acos(f/r) - f * np.sqrt(r**2 - f**2))
+
+        return np.trapezoid(X * A, X) / np.trapezoid(A, X), 0
     
     # Returns the volume of a trilobed envelope.
     #
@@ -189,6 +206,22 @@ class GertlerEnvelope:
         L = R + R2 + np.minimum(R, f) + np.maximum(0, Y_TOP - Y_BOTTOM)
 
         return 2 * np.trapezoid(L, X)
+    
+    # Returns the center of volume for a trilobe design.
+    def cv_trilobe (self, e, f, g, central_lobe = None):
+        X, R, R2 = get_trilobe_axis(self, central_lobe or self, e)
+        Y = np.zeros_like(X)        # Center of area in vertical direction due to lobe offsets
+        A = np.zeros_like(X)        # Array of cross sections
+
+        for i in range(len(X)):
+            union = unary_union([Point(-f, 0).buffer(R[i]), Point(f, 0).buffer(R[i]), Point(0, g).buffer(R2[i])])
+
+            A[i] = union.area
+            if A[i]: 
+                Y[i] = union.centroid.y
+        
+        V = np.trapezoid(A, X)
+        return np.trapezoid(X * A, X) / V, np.trapezoid(Y * A, X) / V
     
     # Returns the coordinates of points on the envelope which intercepts the trailing edge of a fin and the necessary intercept offset.
     def get_fin_intercept (self, x, rc):
