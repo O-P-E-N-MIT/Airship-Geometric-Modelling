@@ -90,7 +90,7 @@ class AirshipGeometry:
 
         if not os.path.exists(salome_launcher_path):
             raise FileNotFoundError(f"Salome launcher not found at: {salome_launcher_path}.")
-
+        
         mode_flag = "-g" if open_gui else "-t"
         script_path_safe = os.path.normpath(script_path).replace(os.path.sep, '/')
 

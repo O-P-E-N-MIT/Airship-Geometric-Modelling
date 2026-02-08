@@ -4,6 +4,7 @@ ENVELOPE_LENGTH = 100
 ENVELOPE_PARAMS = (0.419, 0.337, 0.251, 0.651, 3.266)
 ENVELOPE_RESOLUTION = 100
 ENVELOPE_TRUNCATION_RATIO = 0
+ENVELOPE_SERIES = "GERTLER"
 
 LOBE_NUMBER = 1
 LOBE_OFFSET_X = 13.333
@@ -47,8 +48,8 @@ import importlib
 sys.path.append(DIRECTORY_PATH)
 
 # This is to reload the local modules once they are changed.
-import new
-importlib.reload(new)
+import geometry_handler
+importlib.reload(geometry_handler)
 
 # Inititating the Geometry Module of Salome.
 salome.salome_init()
@@ -74,8 +75,13 @@ print('[LOG] Generating hull Profile...')
 
 def create_envelope (params, length):
     print(f'[LOG] Generating envelope having Gertler parameters {params}...')
-    gertler = new.GertlerEnvelope.from_parameters(params, length, ENVELOPE_RESOLUTION)
-    envelope_vertices = [geompy.MakeVertex(x, y, 0) for x, y in gertler.points(ENVELOPE_TRUNCATION_RATIO)]
+    
+    if ENVELOPE_SERIES == "GERTLER":
+        envelope_geom = geometry_handler.GertlerEnvelope.from_parameters(params, length, ENVELOPE_RESOLUTION)
+    elif ENVELOPE_SERIES == "NACA":
+        envelope_geom = geometry_handler.NACAEnvelope.from_parameters((params[4],), length, ENVELOPE_RESOLUTION)
+
+    envelope_vertices = [geompy.MakeVertex(x, y, 0) for x, y in envelope_geom.points(ENVELOPE_TRUNCATION_RATIO)]
 
     envelope_edges = [geompy.MakeInterpol(envelope_vertices, False, False), geompy.MakeLineTwoPnt(geompy.MakeVertex(length * (1 - ENVELOPE_TRUNCATION_RATIO), 0, 0), O)]
 
@@ -87,9 +93,9 @@ def create_envelope (params, length):
     envelope_face = geompy.MakeFace(envelope_wire, 1)
     envelope = geompy.MakeRevolution(envelope_face, OX, 2 * np.pi)
 
-    return gertler, envelope
+    return envelope_geom, envelope
 
-extreme_gertler, extreme_lobe = create_envelope(ENVELOPE_PARAMS, ENVELOPE_LENGTH)
+extreme_envelope_geom, extreme_lobe = create_envelope(ENVELOPE_PARAMS, ENVELOPE_LENGTH)
 
 lobes = [extreme_lobe] if LOBE_NUMBER == 1 else [translate_object(extreme_lobe, 0, -1, 0), translate_object(extreme_lobe, 0, 1, 0)]
 
@@ -106,7 +112,7 @@ fins = []
 if INCLUDE_FINS:
     print('[LOG] Generating fins...')
 
-    RC_RADIAL_OFFSET = extreme_gertler.at(FIN_AXIAL_OFFSET)
+    RC_RADIAL_OFFSET = extreme_envelope_geom.at(FIN_AXIAL_OFFSET)
     TC_RADIAL_OFFSET = RC_RADIAL_OFFSET + FIN_HEIGHT
     RC_AXIAL_OFFSET = FIN_AXIAL_OFFSET
     TC_AXIAL_OFFSET = RC_AXIAL_OFFSET + FIN_RC_LENGTH/2 * (1 - FIN_TAPER_RATIO) + FIN_HEIGHT * np.tan(np.radians(FIN_SWEEP_ANGLE))
@@ -117,7 +123,7 @@ if INCLUDE_FINS:
     rc_vertices = []
     tc_vertices = []
 
-    for x, y in new.naca_airfoil_points(FIN_THICKNESS, FIN_SECTION_RESOLUTION, FIN_RC_LENGTH):
+    for x, y in geometry_handler.naca_airfoil_points(FIN_THICKNESS, FIN_SECTION_RESOLUTION, FIN_RC_LENGTH):
         rc_vertices.append(geompy.MakeVertex(RC_AXIAL_OFFSET + x, y, RC_RADIAL_OFFSET))
         tc_vertices.append(geompy.MakeVertex(TC_AXIAL_OFFSET + x * FIN_TAPER_RATIO * COS_TIP_ANGLE, y * FIN_TAPER_RATIO, TC_RADIAL_OFFSET - x * FIN_TAPER_RATIO * SIN_TIP_ANGLE))
 
@@ -129,7 +135,7 @@ if INCLUDE_FINS:
     midchord_direction = [geompy.MakeVertex(RC_AXIAL_OFFSET, 0, 0), geompy.MakeVertex(TC_AXIAL_OFFSET, 0, FIN_HEIGHT)]
     planform_surface = geompy.MakePipeWithDifferentSectionsBySteps([rc_wire, tc_wire], midchord_direction, geompy.MakePolyline(midchord_direction, False))
 
-    TRAIL_X, TRAIL_Z, INTERCEPT_OFFSET = extreme_gertler.get_fin_intercept(RC_AXIAL_OFFSET, FIN_RC_LENGTH)
+    TRAIL_X, TRAIL_Z, INTERCEPT_OFFSET = extreme_envelope_geom.get_fin_intercept(RC_AXIAL_OFFSET, FIN_RC_LENGTH)
 
     fin = geompy.MakeSolid(geompy.MakeShell([planform_surface, rc_face, tc_face]))
     fin = geompy.MakeRotationThreePoints(fin, geompy.MakeVertex(RC_AXIAL_OFFSET, 0, RC_RADIAL_OFFSET), geompy.MakeVertex(RC_AXIAL_OFFSET + FIN_RC_LENGTH, 0, RC_RADIAL_OFFSET), geompy.MakeVertex(TRAIL_X, 0, TRAIL_Z))
