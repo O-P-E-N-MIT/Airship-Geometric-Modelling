@@ -1,4 +1,4 @@
-# INPUT PARAMETERS START 
+# INPUT PARAMETERS START
 
 ENVELOPE_LENGTH = 100
 ENVELOPE_PARAMS = (0.419, 0.337, 0.251, 0.651, 3.266)
@@ -153,10 +153,22 @@ try:
         sys.stdout.flush()
 
     # --- Modelling of Wings ---
+    # --- Modelling of Wings ---
     wings = []
     if INCLUDE_WINGS and WING_SPAN > 0:
         print('[LOG] Generating wings...')
         sys.stdout.flush()
+
+        # Calculate the hull radius at the wing's axial offset
+        WING_ROOT_RADIUS = extreme_envelope_geom.at(WING_AXIAL_OFFSET)
+        try:
+            # Find the intercept offset to ensure the root chord fully penetrates the curved hull
+            _, _, WING_INTERCEPT = extreme_envelope_geom.get_fin_intercept(WING_AXIAL_OFFSET, WING_ROOT_CHORD)
+        except Exception:
+            WING_INTERCEPT = 0.0
+
+        # The true starting Y coordinate for the wing root
+        WING_START_Y = WING_ROOT_RADIUS - WING_INTERCEPT
 
         n_span = 10
         y_stations = np.linspace(0, WING_SPAN/2, n_span)
@@ -175,7 +187,9 @@ try:
             span_half = WING_SPAN/2 if WING_SPAN > 0 else 1
             theta_val = WING_TWIST_ROOT + (WING_TWIST_TIP - WING_TWIST_ROOT) * (y_stations[i] / span_half)
             twist = np.radians(theta_val)
-            y_val = y_stations[i]
+
+            # Apply the hull surface offset to the Y coordinate
+            y_val = y_stations[i] + WING_START_Y
 
             pts_right = []
             pts_left = []
@@ -191,6 +205,7 @@ try:
                 X_final = WING_AXIAL_OFFSET + x_rot + x_le[i]
                 Z_final = z_rot + z_shift[i]
 
+                # Generate symmetric points
                 pts_right.append(geompy.MakeVertex(X_final, y_val, Z_final))
                 pts_left.append(geompy.MakeVertex(X_final, -y_val, Z_final))
 
@@ -204,6 +219,7 @@ try:
     else:
         print('[LOG] Skipping wing generation...')
         sys.stdout.flush()
+
 
     # --- Modelling of Thin Fairings ---
     fairings = []
