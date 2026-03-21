@@ -11,7 +11,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout, QGridLayout, QLabel, QLineEdit, QPushButton,
     QComboBox, QSlider, QGroupBox, QFileDialog, QTextEdit,
     QButtonGroup, QCheckBox, QMessageBox, QSplitter, QTableWidget,
-    QTableWidgetItem, QHeaderView, QScrollArea
+    QTableWidgetItem, QHeaderView, QScrollArea, QSizePolicy
 )
 from pyvistaqt import BackgroundPlotter
 
@@ -159,9 +159,26 @@ class LabeledSlider(QGroupBox):
 class AirshipGUI(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Airship Geometry Generator | Salome Interface")
-        self.setGeometry(100, 100, 1400, 950)
+        self.setWindowTitle("STRATOS: Software-based Tool for Rapid Airship Translation & Optimized Shaping")
 
+        # --- NEW: AUTO-SET ASPECT RATIO & FULLSCREEN ---
+        # 1. Get the primary screen information
+        screen = QApplication.primaryScreen().geometry()
+        screen_width = screen.width()
+        screen_height = screen.height()
+
+        # 2. Set a fallback size (90% of screen) if user restores from maximized
+        width = int(screen_width * 0.9)
+        height = int(screen_height * 0.9)
+        self.resize(width, height)
+
+        # 3. Default to Maximized (Taskbar visible)
+        # This replaces the fixed setGeometry(100, 100, 1400, 950)
+        self.showMaximized()
+        # QApplication.setAttribute(Qt.AA_EnableHighDpiScaling)
+        # QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps)
+
+        # --- EXISTING INITIALIZATION ---
         self.salome_path = r"C:\SALOME-9.15.0\run_SALOME.bat"
         self.base_output_directory = os.path.join(os.path.expanduser("~"), "Documents", "Airship_Outputs")
         if not os.path.exists(self.base_output_directory):
@@ -169,6 +186,7 @@ class AirshipGUI(QMainWindow):
 
         self.current_session_folder = self.base_output_directory
         self.inputs = {}
+
         self.setup_style()
         self.central_widget = QWidget()
         self.setCentralWidget(self.central_widget)
@@ -177,26 +195,25 @@ class AirshipGUI(QMainWindow):
         self._init_persistent_controls()
 
         self.tab_widget = QTabWidget()
+        # Add stretch to make the tab widget take up all available vertical space
+        self.tab_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+
         self.primary_input_tab = QWidget()
         self.fairings_tab = QWidget()
         self.fin_tab = QWidget()
-
-        # --- NEW: Initialize the wing tab container ---
         self.wing_tab = QWidget()
-
         self.output_tab = QWidget()
 
         self.setup_primary_tab_layout()
         self.setup_aerostat_tab()
         self.setup_fairings_tab()
         self.setup_fin_tab()
-
-        # --- NEW: Build the wing tab UI ---
         self.setup_wing_tab()
-
         self.setup_output_tab()
 
         self.main_layout.addWidget(self.tab_widget)
+
+        # Navigation buttons (Next/Prev/Exit/Reset)
         self.main_layout.addWidget(self.setup_navigation_buttons())
 
         self.tab_widget.currentChanged.connect(self._on_tab_changed)
