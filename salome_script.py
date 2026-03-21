@@ -162,13 +162,18 @@ try:
         # Calculate the hull radius at the wing's axial offset
         WING_ROOT_RADIUS = extreme_envelope_geom.at(WING_AXIAL_OFFSET)
         try:
-            # Find the intercept offset to ensure the root chord fully penetrates the curved hull
+            # Find the 2D intercept offset to ensure the root chord penetrates the curve
             _, _, WING_INTERCEPT = extreme_envelope_geom.get_fin_intercept(WING_AXIAL_OFFSET, WING_ROOT_CHORD)
         except Exception:
             WING_INTERCEPT = 0.0
 
-        # The true starting Y coordinate for the wing root
-        WING_START_Y = WING_ROOT_RADIUS - WING_INTERCEPT
+        # NEW: 3D Penetration Margin to fix the gap
+        # The hull curves away from the flat wing root in 3D space.
+        # We sink it inward slightly based on chord and thickness to guarantee a clean Boolean fuse.
+        PENETRATION_MARGIN = (WING_ROOT_CHORD * 0.15) + ((WING_THICKNESS / 100.0) * WING_ROOT_CHORD)
+
+        # The true starting Y coordinate for the wing root (sunk inside the hull)
+        WING_START_Y = max(0, WING_ROOT_RADIUS - WING_INTERCEPT - PENETRATION_MARGIN)
 
         n_span = 10
         y_stations = np.linspace(0, WING_SPAN/2, n_span)
@@ -188,7 +193,7 @@ try:
             theta_val = WING_TWIST_ROOT + (WING_TWIST_TIP - WING_TWIST_ROOT) * (y_stations[i] / span_half)
             twist = np.radians(theta_val)
 
-            # Apply the hull surface offset to the Y coordinate
+            # Apply the embedded hull surface offset to the Y coordinate
             y_val = y_stations[i] + WING_START_Y
 
             pts_right = []
