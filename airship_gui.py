@@ -424,9 +424,9 @@ class AirshipGUI(QMainWindow):
 
         wing_dim_group = QGroupBox("Wing Parameters")
         w_layout = QGridLayout(wing_dim_group)
-        self.inputs["WING_SPAN"] = LabeledSlider("Span (m)", 5.0, 100.0, 20.0, 0.1, 2)
-        self.inputs["WING_ROOT_CHORD"] = LabeledSlider("Root Chord (Cr)", 1.0, 20.0, 5.0, 0.1, 2)
-        self.inputs["WING_TIP_CHORD"] = LabeledSlider("Tip Chord (Ct)", 0.1, 20.0, 2.0, 0.1, 2)
+        self.inputs["WING_SPAN"] = LabeledSlider("Span (m)", 5.0, 100.0, 80.0, 0.1, 2)
+        self.inputs["WING_ROOT_CHORD"] = LabeledSlider("Root Chord (Cr)", 1.0, 20.0, 30.0, 0.1, 2)
+        self.inputs["WING_TIP_CHORD"] = LabeledSlider("Tip Chord (Ct)", 0.1, 20.0, 20.0, 0.1, 2)
         self.inputs["WING_SWEEP"] = LabeledSlider("Sweep (Deg)", 0.0, 45.0, 15.0, 0.1, 2)
         self.inputs["WING_DIHEDRAL"] = LabeledSlider("Dihedral (Deg)", -10.0, 30.0, 5.0, 0.1, 2)
         self.inputs["WING_TWIST_ROOT"] = LabeledSlider("Root Twist (Deg)", -10.0, 15.0, 2.0, 0.1, 2)
@@ -1115,7 +1115,6 @@ class AirshipGUI(QMainWindow):
             "BALLONET_FABRIC_DENSITY", "MARGIN_HEIGHT", "SAFETY_FACTOR",
             "SOLAR_FLUX", "WIND_SPEED", "EMISSIVITY", "ABSORPTIVITY",
             "FATIGUE_FACTOR", "UV_DEGRADATION",
-            # --- NEW: ADDED WING KEYS HERE ---
             "WING_SPAN", "WING_ROOT_CHORD", "WING_TIP_CHORD", "WING_SWEEP",
             "WING_DIHEDRAL", "WING_TWIST_ROOT", "WING_TWIST_TIP",
             "WING_THICKNESS", "WING_AXIAL_OFFSET"
@@ -1391,9 +1390,9 @@ class AirshipGUI(QMainWindow):
 
             elif hasattr(self, 'wing_tab') and current_tab == self.wing_tab:
                 wing_defaults = {
-                    "WING_SPAN": 20.0,
-                    "WING_ROOT_CHORD": 5.0,
-                    "WING_TIP_CHORD": 2.0,
+                    "WING_SPAN": 80.0,
+                    "WING_ROOT_CHORD": 30.0,
+                    "WING_TIP_CHORD": 20.0,
                     "WING_SWEEP": 15.0,
                     "WING_DIHEDRAL": 5.0,
                     "WING_TWIST_ROOT": 2.0,

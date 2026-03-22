@@ -50,7 +50,7 @@ class Envelope:
         self.n = int(n)
 
     # Returns the coordinates of points on the envelope which intercepts the trailing edge of a fin and the necessary intercept offset.
-    def get_fin_intercept (self, x, rc):
+    def get_chord_intercept (self, x, rc):
         chord_length = 0
         h = self.length / self.n
         y = self.at(x)
@@ -72,7 +72,7 @@ class Envelope:
 
         # If the final chord length is smaller than the root chord, it means the axial offset is too high for a fin to be placed on the hull.
         if chord_length < rc:
-            raise Exception("Envelope: Unable to find the trailing edge intercept for the given parameters.")
+            raise Exception("GeometryHandlerError: Unable to find the trailing edge intercept for the given parameters.")
         
         X = np.asarray(X, dtype=float)
         Y = np.asarray(Y, dtype=float)

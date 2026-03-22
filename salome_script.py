@@ -51,11 +51,11 @@ import os
 import traceback
 import importlib
 
-# Ensure the paths are registered
+# Ensuring the paths are registered so that we can import modules like geometry_handler from this directory.
+# TODO: This may append even if the directory path is already there so fix it.
 sys.path.append(DIRECTORY_PATH)
 
 try:
-    # We wrap everything inside the try block so any crash is caught and logged
     import salome
     from salome.geom import geomBuilder
     import numpy as np
@@ -74,7 +74,9 @@ try:
     def translate_object (object, x_offset, y_offset, z_offset):
         return geompy.MakeTranslationTwoPoints(object, O, geompy.MakeVertex(x_offset * LOBE_OFFSET_X, y_offset * LOBE_OFFSET_Y, z_offset * LOBE_OFFSET_Z))
 
-    # --- Modelling of envelope ---
+    # ---
+    # Modelling of Envelope
+    # ---
     print('[LOG] Generating hull Profile...')
     sys.stdout.flush()
 
@@ -105,7 +107,9 @@ try:
         central_lobe = extreme_lobe if not CENTRAL_LOBE_PARAMS else create_envelope(CENTRAL_LOBE_PARAMS, CENTRAL_LOBE_LENGTH)[1]
         lobes.append(translate_object(central_lobe, 1, 0, 1))
 
-    # --- Modelling of Fins ---
+    # --- 
+    # Modelling of Fins 
+    # ---
     fins = []
     
     # Fin axial offset will be negative if the envelope length is smaller than fin root chord. In that case, fin generation is skipped.
@@ -136,7 +140,7 @@ try:
         midchord_direction = [geompy.MakeVertex(RC_AXIAL_OFFSET, 0, 0), geompy.MakeVertex(TC_AXIAL_OFFSET, 0, FIN_HEIGHT)]
         planform_surface = geompy.MakePipeWithDifferentSectionsBySteps([rc_wire, tc_wire], midchord_direction, geompy.MakePolyline(midchord_direction, False))
 
-        TRAIL_X, TRAIL_Z, INTERCEPT_OFFSET = extreme_envelope_geom.get_fin_intercept(RC_AXIAL_OFFSET, FIN_RC_LENGTH)
+        TRAIL_X, TRAIL_Z, INTERCEPT_OFFSET = extreme_envelope_geom.get_chord_intercept(RC_AXIAL_OFFSET, FIN_RC_LENGTH)
 
         fin = geompy.MakeSolid(geompy.MakeShell([planform_surface, rc_face, tc_face]))
         fin = geompy.MakeRotationThreePoints(fin, geompy.MakeVertex(RC_AXIAL_OFFSET, 0, RC_RADIAL_OFFSET), geompy.MakeVertex(RC_AXIAL_OFFSET + FIN_RC_LENGTH, 0, RC_RADIAL_OFFSET), geompy.MakeVertex(TRAIL_X, 0, TRAIL_Z))
@@ -154,80 +158,81 @@ try:
         print('[LOG] Skipping fin generation...')
         sys.stdout.flush()
 
-    # --- Modelling of Wings ---
+    # --- 
+    # Modelling of Wings 
+    # ---
     wings = []
+
     if INCLUDE_WINGS and WING_SPAN > 0:
         print('[LOG] Generating wings...')
         sys.stdout.flush()
 
         # Calculate the hull radius at the wing's axial offset
-        WING_ROOT_RADIUS = extreme_envelope_geom.at(WING_AXIAL_OFFSET)
-        try:
-            # Find the 2D intercept offset to ensure the root chord penetrates the curve
-            _, _, WING_INTERCEPT = extreme_envelope_geom.get_fin_intercept(WING_AXIAL_OFFSET, WING_ROOT_CHORD)
-        except Exception:
-            WING_INTERCEPT = 0.0
+        WING_RADIAL_OFFSET = extreme_envelope_geom.at(WING_AXIAL_OFFSET)
+        WING_TE_AXIAL_OFFSET, _, WING_INTERCEPT = extreme_envelope_geom.get_chord_intercept(WING_AXIAL_OFFSET, WING_ROOT_CHORD)
 
-        # NEW: 3D Penetration Margin to fix the gap
-        # The hull curves away from the flat wing root in 3D space.
-        # We sink it inward slightly based on chord and thickness to guarantee a clean Boolean fuse.
-        PENETRATION_MARGIN = (WING_ROOT_CHORD * 0.15) + ((WING_THICKNESS / 100.0) * WING_ROOT_CHORD)
+        # Error handling if wing and fin geometries overlap.
+        if WING_TE_AXIAL_OFFSET >= FIN_AXIAL_OFFSET:
+            raise Exception("GeometryHandlerError: Wing and Fin geometries overlap.")
 
-        # The true starting Y coordinate for the wing root (sunk inside the hull)
-        WING_START_Y = max(0, WING_ROOT_RADIUS - WING_INTERCEPT - PENETRATION_MARGIN)
+        # The radial offset is adjusted for the intercept with an additional margin.
+        WING_RADIAL_OFFSET -= WING_INTERCEPT + (WING_SPAN / WING_ROOT_CHORD) * 1e-2
 
-        n_span = 10
-        y_stations = np.linspace(0, WING_SPAN/2, n_span)
+        # If the offset ended up being negative.
+        if WING_RADIAL_OFFSET < 0:
+            WING_RADIAL_OFFSET = 0
 
-        taper = WING_TIP_CHORD / WING_ROOT_CHORD if WING_ROOT_CHORD > 0 else 0
-        c_dist = WING_ROOT_CHORD * (1 - (1 - taper) * (2 * y_stations / WING_SPAN))
-        x_le = y_stations * np.tan(np.radians(WING_SWEEP))
-        z_shift = y_stations * np.tan(np.radians(WING_DIHEDRAL))
+        # In case of a multi lobe design.
+        if LOBE_NUMBER > 1:
+            WING_RADIAL_OFFSET += LOBE_OFFSET_X
 
-        wires_right = []
-        wires_left = []
+        # Everything is assume to be a linear variation so two stations are enough.
+        y_stations = [0, WING_SPAN/2]
+        c_dist = [WING_ROOT_CHORD, WING_TIP_CHORD]
+        x_le = [0, np.tan(np.radians(WING_SWEEP))]
+        z_shift = [0, np.tan(np.radians(WING_DIHEDRAL))]
 
-        for i in range(len(y_stations)):
-            chord = c_dist[i]
+        # Precalculate trigonometric functions as they consume a lot of floating operations.
+        twist_dist = np.radians(np.array([WING_TWIST_ROOT, WING_TWIST_TIP], dtype=float))
+        twist_cos_dist = np.cos(twist_dist)
+        twist_sin_dist = np.sin(twist_dist)
 
-            span_half = WING_SPAN/2 if WING_SPAN > 0 else 1
-            theta_val = WING_TWIST_ROOT + (WING_TWIST_TIP - WING_TWIST_ROOT) * (y_stations[i] / span_half)
-            twist = np.radians(theta_val)
+        # In case of a trilobe design, the wings will be attached to the extreme lobes for which the z shift has to be taken into account.
+        if LOBE_NUMBER == 3:
+            z_shift += LOBE_OFFSET_Z
 
-            # Apply the embedded hull surface offset to the Y coordinate
-            y_val = y_stations[i] + WING_START_Y
+        wires = []
 
-            pts_right = []
-            pts_left = []
+        for i in range(2):
+            c = c_dist[i]
+            y = y_stations[i] + WING_RADIAL_OFFSET
 
-            for x_af, z_af in geometry_handler.naca_airfoil_points(WING_THICKNESS, FIN_SECTION_RESOLUTION, chord):
-                x_qc = 0.25 * chord
-                x_shift_val = x_af - x_qc
+            # Twist happens about the aerodynamic center.
+            ac = 0.25 * c
+            points = []
 
-                x_rot = x_shift_val * np.cos(twist) + z_af * np.sin(twist)
-                z_rot = -x_shift_val * np.sin(twist) + z_af * np.cos(twist)
-                x_rot += x_qc
+            # TODO: There is no separate resolution parameter for wing section. Instead, the resolution of fin section are used.
+            for x_af, z_af in geometry_handler.naca_airfoil_points(WING_THICKNESS, FIN_SECTION_RESOLUTION, c):
+                x_shift_val = x_af - ac
+                x_rot = x_shift_val * twist_cos_dist[i] + z_af * twist_sin_dist[i] + ac
+                z_rot = -x_shift_val * twist_sin_dist[i] + z_af * twist_cos_dist[i]
 
-                X_final = WING_AXIAL_OFFSET + x_rot + x_le[i]
-                Z_final = z_rot + z_shift[i]
+                points.append(geompy.MakeVertex(WING_AXIAL_OFFSET + x_le[i] + x_rot, y, z_rot + z_shift[i]))
 
-                # Generate symmetric points
-                pts_right.append(geompy.MakeVertex(X_final, y_val, Z_final))
-                pts_left.append(geompy.MakeVertex(X_final, -y_val, Z_final))
+            wires.append(geompy.MakePolyline(points, True))
 
-            wires_right.append(geompy.MakePolyline(pts_right, True))
-            wires_left.append(geompy.MakePolyline(pts_left, True))
-
-        wing_right = geompy.MakeThruSections(wires_right, True, 0.0001, False)
-        wing_left = geompy.MakeThruSections(wires_left, True, 0.0001, False)
-
-        wings = [wing_right, wing_left]
+        # Create the right wing and make the left wing by creating its rotation.
+        wing = geompy.MakeThruSections(wires, True, 0.0001, False)
+        wings = [wing, geompy.MakeRotation(wing, OX, -np.pi)]
     else:
         print('[LOG] Skipping wing generation...')
         sys.stdout.flush()
 
+    # --- 
+    # Modelling of Thin Fairings 
+    # ---
 
-    # --- Modelling of Thin Fairings ---
+    # TODO: Boolean operation on thin fairings may result in weird failures. This has to be taken into account.
     fairings = []
     def create_fairing_quad (p1, p2, p3, p4):
         fairing = geompy.MakeQuad4Vertices(geompy.MakeVertex(*p1), geompy.MakeVertex(*p2), geompy.MakeVertex(*p3), geompy.MakeVertex(*p4))
@@ -244,26 +249,24 @@ try:
             create_fairing_quad((ENVELOPE_LENGTH, -LOBE_OFFSET_Y, 0), (CENTRAL_LOBE_LENGTH + LOBE_OFFSET_X, 0, LOBE_OFFSET_Z), (ENVELOPE_LENGTH - SHEET_LENGTH, -LOBE_OFFSET_Y, 0), (CENTRAL_LOBE_LENGTH + LOBE_OFFSET_X - SHEET_LENGTH, 0, LOBE_OFFSET_Z))
             create_fairing_quad((ENVELOPE_LENGTH, LOBE_OFFSET_Y, 0), (CENTRAL_LOBE_LENGTH + LOBE_OFFSET_X, 0, LOBE_OFFSET_Z), (ENVELOPE_LENGTH - SHEET_LENGTH, LOBE_OFFSET_Y, 0), (CENTRAL_LOBE_LENGTH + LOBE_OFFSET_X - SHEET_LENGTH, 0, LOBE_OFFSET_Z))
 
-    # --- Final Fusion Logic ---
+    # --- 
+    # Final Airship Union
+    # ---
     print('[LOG] Generating final model...')
     sys.stdout.flush()
 
-    if len(lobes) > 1:
-        Final_Lobes_Solid = geompy.MakeFuseList(lobes)
-    else:
-        Final_Lobes_Solid = lobes[0]
+    # This intermmediate boolean operation may not be required.
+    Final_Lobes_Solid = geompy.MakeFuseList(lobes) if len(lobes) > 1 else lobes[0]
+    Final_Airship_Solid = geompy.MakeFuseList(lobes + fins + wings)
 
-    components_to_fuse = lobes + (fins if INCLUDE_FINS else []) + wings
-    if len(components_to_fuse) > 1:
-        Final_Airship_Solid = geompy.MakeFuseList(components_to_fuse)
-    else:
-        Final_Airship_Solid = components_to_fuse[0]
-
-    if len(fairings) > 0:
+    # NOTE: There was a weird boolean operation issue when fusing fairings in a single boolean.
+    # Atleast, this does not happen by doing something like this. Still have to figure out the issue.
+    if SHEET_LENGTH_RATIO:
         Final_Airship_Solid = geompy.MakeCompound([Final_Airship_Solid] + fairings)
 
     Final_Airship_Solid_ID = geompy.addToStudy(Final_Airship_Solid, FINAL_OBJECT_NAME)
 
+    # In case of a Salome GUI for debugging, the component is made visible,
     if salome.sg.hasDesktop():
         gg = salome.ImportComponentGUI("GEOM")
         gg.createAndDisplayGO(Final_Airship_Solid_ID)
@@ -289,11 +292,13 @@ try:
     print(f'[LOG] Exported {OUTPUT_FORMAT} successfully.')
     sys.stdout.flush()
 
+# In case of any error in Salome, the error is logged in a text file in the output folder.
+# TODO: Figure out a way so that the frontend becomes aware of the failure in the Salome pipeline.
 except Exception as e:
-    # IF SALOME CRASHES, IT WILL WRITE THE ERROR HERE
     error_log_path = os.path.join(OUTPUT_DIRECTORY, "salome_crash_log.txt")
     with open(error_log_path, "w") as f:
         f.write("--- SALOME FATAL ERROR ---\n")
         f.write(traceback.format_exc())
+
     print(f"[FATAL ERROR] Salome crashed. Please open {error_log_path} to see the exact error.")
     sys.stdout.flush()
