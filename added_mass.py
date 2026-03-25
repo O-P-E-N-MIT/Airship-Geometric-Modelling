@@ -1,6 +1,8 @@
 import numpy as np
     
 def compute_added_mass (vertices, faces, normals):
+    # 3. Build X, Y, Z matrices
+    
     print("[MATH] Building X Y Z matrices...")
 
     n = faces.shape[0]
