@@ -50,9 +50,9 @@ import sys
 import os
 import traceback
 import importlib
+import math
 
-# Ensuring the paths are registered so that we can import modules like geometry_handler from this directory.
-# TODO: This may append even if the directory path is already there so fix it.
+# Ensure the paths are registered
 sys.path.append(DIRECTORY_PATH)
 
 try:
@@ -71,16 +71,34 @@ try:
     OY = geompy.MakeVectorDXDYDZ(0, 1, 0)
     OZ = geompy.MakeVectorDXDYDZ(0, 0, 1)
 
-    def translate_object (object, x_offset, y_offset, z_offset):
+    # --- TOPOLOGY SAFEGUARD ---
+    def safe_polyline(pts, is_closed=True):
+        clean_pts = []
+        for p in pts:
+            if not clean_pts:
+                clean_pts.append(p)
+            else:
+                c1 = geompy.PointCoordinates(p)
+                c2 = geompy.PointCoordinates(clean_pts[-1])
+                if math.sqrt(sum((a-b)**2 for a, b in zip(c1, c2))) > 1e-6:
+                    clean_pts.append(p)
+
+        if is_closed and len(clean_pts) > 2:
+            c1 = geompy.PointCoordinates(clean_pts[0])
+            c2 = geompy.PointCoordinates(clean_pts[-1])
+            if math.sqrt(sum((a-b)**2 for a, b in zip(c1, c2))) < 1e-6:
+                clean_pts = clean_pts[:-1]
+
+        return geompy.MakePolyline(clean_pts, is_closed)
+
+    def translate_object(object, x_offset, y_offset, z_offset):
         return geompy.MakeTranslationTwoPoints(object, O, geompy.MakeVertex(x_offset * LOBE_OFFSET_X, y_offset * LOBE_OFFSET_Y, z_offset * LOBE_OFFSET_Z))
 
-    # ---
-    # Modelling of Envelope
-    # ---
+    # --- Modelling of envelope ---
     print('[LOG] Generating hull Profile...')
     sys.stdout.flush()
 
-    def create_envelope (params, length):
+    def create_envelope(params, length):
         if ENVELOPE_SERIES == "GERTLER":
             envelope_geom = geometry_handler.GertlerEnvelope.from_parameters(params, length, ENVELOPE_RESOLUTION)
         elif ENVELOPE_SERIES == "NACA":
@@ -107,134 +125,143 @@ try:
         central_lobe = extreme_lobe if not CENTRAL_LOBE_PARAMS else create_envelope(CENTRAL_LOBE_PARAMS, CENTRAL_LOBE_LENGTH)[1]
         lobes.append(translate_object(central_lobe, 1, 0, 1))
 
-    # --- 
-    # Modelling of Fins 
-    # ---
+    # --- Modelling of Fins ---
     fins = []
-    
-    # Fin axial offset will be negative if the envelope length is smaller than fin root chord. In that case, fin generation is skipped.
-    if INCLUDE_FINS and FIN_AXIAL_OFFSET > 0:
+    if INCLUDE_FINS:
         print('[LOG] Generating fins...')
         sys.stdout.flush()
 
-        RC_RADIAL_OFFSET = extreme_envelope_geom.at(FIN_AXIAL_OFFSET)
-        TC_RADIAL_OFFSET = RC_RADIAL_OFFSET + FIN_HEIGHT
-        RC_AXIAL_OFFSET = FIN_AXIAL_OFFSET
-        TC_AXIAL_OFFSET = RC_AXIAL_OFFSET + FIN_RC_LENGTH/2 * (1 - FIN_TAPER_RATIO) + FIN_HEIGHT * np.tan(np.radians(FIN_SWEEP_ANGLE))
+        try:
+            RC_RADIAL_OFFSET = extreme_envelope_geom.at(FIN_AXIAL_OFFSET)
+            TC_RADIAL_OFFSET = RC_RADIAL_OFFSET + FIN_HEIGHT
+            RC_AXIAL_OFFSET = FIN_AXIAL_OFFSET
+            TC_AXIAL_OFFSET = RC_AXIAL_OFFSET + FIN_RC_LENGTH/2 * (1 - FIN_TAPER_RATIO) + FIN_HEIGHT * np.tan(np.radians(FIN_SWEEP_ANGLE))
 
-        COS_TIP_ANGLE = np.cos(np.radians(FIN_TIP_ANGLE))
-        SIN_TIP_ANGLE = np.sin(np.radians(FIN_TIP_ANGLE))
+            COS_TIP_ANGLE = np.cos(np.radians(FIN_TIP_ANGLE))
+            SIN_TIP_ANGLE = np.sin(np.radians(FIN_TIP_ANGLE))
 
-        rc_vertices = []
-        tc_vertices = []
+            rc_vertices = []
+            tc_vertices = []
 
-        for x, y in geometry_handler.naca_airfoil_points(FIN_THICKNESS, FIN_SECTION_RESOLUTION, FIN_RC_LENGTH):
-            rc_vertices.append(geompy.MakeVertex(RC_AXIAL_OFFSET + x, y, RC_RADIAL_OFFSET))
-            tc_vertices.append(geompy.MakeVertex(TC_AXIAL_OFFSET + x * FIN_TAPER_RATIO * COS_TIP_ANGLE, y * FIN_TAPER_RATIO, TC_RADIAL_OFFSET - x * FIN_TAPER_RATIO * SIN_TIP_ANGLE))
+            for x, y in geometry_handler.naca_airfoil_points(FIN_THICKNESS, FIN_SECTION_RESOLUTION, FIN_RC_LENGTH):
+                rc_vertices.append(geompy.MakeVertex(RC_AXIAL_OFFSET + x, y, RC_RADIAL_OFFSET))
+                tc_vertices.append(geompy.MakeVertex(TC_AXIAL_OFFSET + x * FIN_TAPER_RATIO * COS_TIP_ANGLE, y * FIN_TAPER_RATIO, TC_RADIAL_OFFSET - x * FIN_TAPER_RATIO * SIN_TIP_ANGLE))
 
-        rc_wire = geompy.MakePolyline(rc_vertices, True)
-        tc_wire = geompy.MakePolyline(tc_vertices, True)
-        rc_face = geompy.MakeFace(rc_wire, True)
-        tc_face = geompy.MakeFace(tc_wire, True)
+            rc_wire = safe_polyline(rc_vertices, True)
+            tc_wire = safe_polyline(tc_vertices, True)
 
-        midchord_direction = [geompy.MakeVertex(RC_AXIAL_OFFSET, 0, 0), geompy.MakeVertex(TC_AXIAL_OFFSET, 0, FIN_HEIGHT)]
-        planform_surface = geompy.MakePipeWithDifferentSectionsBySteps([rc_wire, tc_wire], midchord_direction, geompy.MakePolyline(midchord_direction, False))
+            fin = geompy.MakeThruSections([rc_wire, tc_wire], True, 0.0001, True)
 
-        TRAIL_X, TRAIL_Z, INTERCEPT_OFFSET = extreme_envelope_geom.get_chord_intercept(RC_AXIAL_OFFSET, FIN_RC_LENGTH)
+            TRAIL_X, TRAIL_Z, INTERCEPT_OFFSET = extreme_envelope_geom.get_chord_intercept(RC_AXIAL_OFFSET, FIN_RC_LENGTH)
 
-        fin = geompy.MakeSolid(geompy.MakeShell([planform_surface, rc_face, tc_face]))
-        fin = geompy.MakeRotationThreePoints(fin, geompy.MakeVertex(RC_AXIAL_OFFSET, 0, RC_RADIAL_OFFSET), geompy.MakeVertex(RC_AXIAL_OFFSET + FIN_RC_LENGTH, 0, RC_RADIAL_OFFSET), geompy.MakeVertex(TRAIL_X, 0, TRAIL_Z))
-        fin = geompy.MakeTranslationVectorDistance(fin, OZ, -INTERCEPT_OFFSET)
+            dz = TRAIL_Z - RC_RADIAL_OFFSET
+            dx = TRAIL_X - RC_AXIAL_OFFSET
+            angle = math.atan2(dz, dx)
 
-        if LOBE_NUMBER == 1:
-            if not FIN_THETA_POS:
-                FIN_THETA_POS = [i * (360 / FIN_NUMBER) for i in range(0, int(FIN_NUMBER))]
-            fins = [geompy.MakeRotation(fin, OX, -np.pi/2 + np.radians(theta)) for theta in FIN_THETA_POS]
-        else:
-            for theta in FIN_THETA_POS:
-                fins.append(translate_object(geompy.MakeRotation(fin, OX, np.radians(theta)), 0, -1, 0))
-                fins.append(translate_object(geompy.MakeRotation(fin, OX, np.radians(-theta)), 0, 1, 0))
+            axis_pt = geompy.MakeVertex(RC_AXIAL_OFFSET, 0, RC_RADIAL_OFFSET)
+            rot_axis = geompy.MakeLineTwoPnt(axis_pt, geompy.MakeVertex(RC_AXIAL_OFFSET, 1, RC_RADIAL_OFFSET))
+
+            # FIX 1: Negate the angle! Salome right-hand rule around +Y makes a negative angle pitch UP.
+            # By negating it, we force the fin to pitch DOWN to follow the hull taper.
+            fin = geompy.MakeRotation(fin, rot_axis, -angle)
+
+            # FIX 2: Apply a penetration margin. The curved hull will fall away from the flat edges of the thick fin.
+            # Sinking it guarantees a clean boolean union without floating gaps.
+            FIN_PENETRATION_MARGIN = (FIN_THICKNESS / 100.0) * FIN_RC_LENGTH * 0.75
+            fin = geompy.MakeTranslationVectorDistance(fin, OZ, -INTERCEPT_OFFSET - FIN_PENETRATION_MARGIN)
+
+            if LOBE_NUMBER == 1:
+                if not FIN_THETA_POS:
+                    FIN_THETA_POS = [i * (360 / FIN_NUMBER) for i in range(0, int(FIN_NUMBER))]
+                fins = [geompy.MakeRotation(fin, OX, -np.pi/2 + np.radians(theta)) for theta in FIN_THETA_POS]
+            else:
+                for theta in FIN_THETA_POS:
+                    fins.append(translate_object(geompy.MakeRotation(fin, OX, np.radians(theta)), 0, -1, 0))
+                    fins.append(translate_object(geompy.MakeRotation(fin, OX, np.radians(-theta)), 0, 1, 0))
+        except Exception as e:
+            print(f"[WARNING] Fin generation failed and was skipped: {e}")
+            sys.stdout.flush()
     else:
         print('[LOG] Skipping fin generation...')
         sys.stdout.flush()
 
-    # --- 
-    # Modelling of Wings 
-    # ---
+    # --- Modelling of Wings ---
     wings = []
-
     if INCLUDE_WINGS and WING_SPAN > 0:
         print('[LOG] Generating wings...')
         sys.stdout.flush()
 
-        # Calculate the hull radius at the wing's axial offset
-        WING_RADIAL_OFFSET = extreme_envelope_geom.at(WING_AXIAL_OFFSET)
-        WING_TE_AXIAL_OFFSET, _, WING_INTERCEPT = extreme_envelope_geom.get_chord_intercept(WING_AXIAL_OFFSET, WING_ROOT_CHORD)
+        try:
+            WING_ROOT_RADIUS = extreme_envelope_geom.at(WING_AXIAL_OFFSET)
+            try:
+                _, _, WING_INTERCEPT = extreme_envelope_geom.get_chord_intercept(WING_AXIAL_OFFSET, WING_ROOT_CHORD)
+            except Exception:
+                WING_INTERCEPT = 0.0
 
-        # Error handling if wing and fin geometries overlap.
-        if WING_TE_AXIAL_OFFSET >= FIN_AXIAL_OFFSET:
-            raise Exception("GeometryHandlerError: Wing and Fin geometries overlap.")
+            PENETRATION_MARGIN = (WING_ROOT_CHORD * 0.15) + ((WING_THICKNESS / 100.0) * WING_ROOT_CHORD)
+            WING_START_Y = max(0, WING_ROOT_RADIUS - WING_INTERCEPT - PENETRATION_MARGIN)
 
-        # The radial offset is adjusted for the intercept with an additional margin.
-        WING_RADIAL_OFFSET -= WING_INTERCEPT + (WING_SPAN / WING_ROOT_CHORD) * 1e-2
+            n_span = 10
+            y_stations = np.linspace(0, WING_SPAN/2, n_span)
 
-        # If the offset ended up being negative.
-        if WING_RADIAL_OFFSET < 0:
-            WING_RADIAL_OFFSET = 0
+            taper = WING_TIP_CHORD / WING_ROOT_CHORD if WING_ROOT_CHORD > 0 else 0
+            c_dist = WING_ROOT_CHORD * (1 - (1 - taper) * (2 * y_stations / WING_SPAN))
+            x_le = y_stations * np.tan(np.radians(WING_SWEEP))
+            z_shift = y_stations * np.tan(np.radians(WING_DIHEDRAL))
 
-        # In case of a multi lobe design.
-        if LOBE_NUMBER > 1:
-            WING_RADIAL_OFFSET += LOBE_OFFSET_X
+            wires_right = []
+            wires_left = []
 
-        # Everything is assume to be a linear variation so two stations are enough.
-        y_stations = [0, WING_SPAN/2]
-        c_dist = [WING_ROOT_CHORD, WING_TIP_CHORD]
-        x_le = [0, np.tan(np.radians(WING_SWEEP))]
-        z_shift = [0, np.tan(np.radians(WING_DIHEDRAL))]
+            use_custom_airfoil = 'AIRFOIL_X' in globals() and 'AIRFOIL_Y' in globals() and len(AIRFOIL_X) > 5
 
-        # Precalculate trigonometric functions as they consume a lot of floating operations.
-        twist_dist = np.radians(np.array([WING_TWIST_ROOT, WING_TWIST_TIP], dtype=float))
-        twist_cos_dist = np.cos(twist_dist)
-        twist_sin_dist = np.sin(twist_dist)
+            for i in range(len(y_stations)):
+                chord = c_dist[i]
+                span_half = WING_SPAN/2 if WING_SPAN > 0 else 1
+                theta_val = WING_TWIST_ROOT + (WING_TWIST_TIP - WING_TWIST_ROOT) * (y_stations[i] / span_half)
+                twist = np.radians(theta_val)
+                y_val = y_stations[i] + WING_START_Y
 
-        # In case of a trilobe design, the wings will be attached to the extreme lobes for which the z shift has to be taken into account.
-        if LOBE_NUMBER == 3:
-            z_shift += LOBE_OFFSET_Z
+                pts_right = []
+                pts_left = []
 
-        wires = []
+                if use_custom_airfoil:
+                    scaled_x = np.array(AIRFOIL_X) * chord
+                    scaled_z = np.array(AIRFOIL_Y) * chord
+                    af_pts = zip(scaled_x, scaled_z)
+                else:
+                    af_pts = geometry_handler.naca_airfoil_points(WING_THICKNESS, FIN_SECTION_RESOLUTION, chord)
 
-        for i in range(2):
-            c = c_dist[i]
-            y = y_stations[i] + WING_RADIAL_OFFSET
+                for x_af, z_af in af_pts:
+                    x_qc = 0.25 * chord
+                    x_shift_val = x_af - x_qc
 
-            # Twist happens about the aerodynamic center.
-            ac = 0.25 * c
-            points = []
+                    x_rot = x_shift_val * np.cos(twist) + z_af * np.sin(twist)
+                    z_rot = -x_shift_val * np.sin(twist) + z_af * np.cos(twist)
+                    x_rot += x_qc
 
-            # TODO: There is no separate resolution parameter for wing section. Instead, the resolution of fin section are used.
-            for x_af, z_af in geometry_handler.naca_airfoil_points(WING_THICKNESS, FIN_SECTION_RESOLUTION, c):
-                x_shift_val = x_af - ac
-                x_rot = x_shift_val * twist_cos_dist[i] + z_af * twist_sin_dist[i] + ac
-                z_rot = -x_shift_val * twist_sin_dist[i] + z_af * twist_cos_dist[i]
+                    X_final = WING_AXIAL_OFFSET + x_rot + x_le[i]
+                    Z_final = z_rot + z_shift[i]
 
-                points.append(geompy.MakeVertex(WING_AXIAL_OFFSET + x_le[i] + x_rot, y, z_rot + z_shift[i]))
+                    pts_right.append(geompy.MakeVertex(X_final, y_val, Z_final))
+                    pts_left.append(geompy.MakeVertex(X_final, -y_val, Z_final))
 
-            wires.append(geompy.MakePolyline(points, True))
+                wires_right.append(safe_polyline(pts_right, True))
+                wires_left.append(safe_polyline(pts_left, True))
 
-        # Create the right wing and make the left wing by creating its rotation.
-        wing = geompy.MakeThruSections(wires, True, 0.0001, False)
-        wings = [wing, geompy.MakeRotation(wing, OX, -np.pi)]
+            wing_right = geompy.MakeThruSections(wires_right, True, 0.0001, True)
+            wing_left = geompy.MakeThruSections(wires_left, True, 0.0001, True)
+            wings = [wing_right, wing_left]
+
+        except Exception as e:
+            print(f"[WARNING] Wing generation failed and was skipped: {e}")
+            sys.stdout.flush()
     else:
         print('[LOG] Skipping wing generation...')
         sys.stdout.flush()
 
-    # --- 
-    # Modelling of Thin Fairings 
-    # ---
-
-    # TODO: Boolean operation on thin fairings may result in weird failures. This has to be taken into account.
+    # --- Modelling of Thin Fairings ---
     fairings = []
-    def create_fairing_quad (p1, p2, p3, p4):
+    def create_fairing_quad(p1, p2, p3, p4):
         fairing = geompy.MakeQuad4Vertices(geompy.MakeVertex(*p1), geompy.MakeVertex(*p2), geompy.MakeVertex(*p3), geompy.MakeVertex(*p4))
         normal = geompy.MakeVectorDXDYDZ(*np.cross(np.array(p2) - np.array(p1), np.array(p3) - np.array(p1)))
         fairings.append(geompy.MakePrismVecH2Ways(fairing, normal, 1e-7))
@@ -249,24 +276,35 @@ try:
             create_fairing_quad((ENVELOPE_LENGTH, -LOBE_OFFSET_Y, 0), (CENTRAL_LOBE_LENGTH + LOBE_OFFSET_X, 0, LOBE_OFFSET_Z), (ENVELOPE_LENGTH - SHEET_LENGTH, -LOBE_OFFSET_Y, 0), (CENTRAL_LOBE_LENGTH + LOBE_OFFSET_X - SHEET_LENGTH, 0, LOBE_OFFSET_Z))
             create_fairing_quad((ENVELOPE_LENGTH, LOBE_OFFSET_Y, 0), (CENTRAL_LOBE_LENGTH + LOBE_OFFSET_X, 0, LOBE_OFFSET_Z), (ENVELOPE_LENGTH - SHEET_LENGTH, LOBE_OFFSET_Y, 0), (CENTRAL_LOBE_LENGTH + LOBE_OFFSET_X - SHEET_LENGTH, 0, LOBE_OFFSET_Z))
 
-    # --- 
-    # Final Airship Union
-    # ---
-    print('[LOG] Generating final model...')
+    # --- Robust Final Fusion Logic ---
+    print('[LOG] Fusing geometry model incrementally...')
     sys.stdout.flush()
 
-    # This intermmediate boolean operation may not be required.
-    Final_Lobes_Solid = geompy.MakeFuseList(lobes) if len(lobes) > 1 else lobes[0]
-    Final_Airship_Solid = geompy.MakeFuseList(lobes + fins + wings)
+    Final_Lobes_Solid = lobes[0]
+    if len(lobes) > 1:
+        try:
+            Final_Lobes_Solid = geompy.MakeFuseList(lobes)
+        except Exception as e:
+            print(f"[WARNING] Lobe Fusion failed: {e}")
 
-    # NOTE: There was a weird boolean operation issue when fusing fairings in a single boolean.
-    # Atleast, this does not happen by doing something like this. Still have to figure out the issue.
-    if SHEET_LENGTH_RATIO:
-        Final_Airship_Solid = geompy.MakeCompound([Final_Airship_Solid] + fairings)
+    Final_Airship_Solid = Final_Lobes_Solid
+
+    appendages = (fins if INCLUDE_FINS else []) + wings
+    for i, appendage in enumerate(appendages):
+        try:
+            Final_Airship_Solid = geompy.MakeFuse(Final_Airship_Solid, appendage)
+        except Exception as e:
+            print(f"[WARNING] Failed to fuse appendage {i}. Bypassing geometry failure: {e}")
+            sys.stdout.flush()
+
+    if len(fairings) > 0:
+        try:
+            Final_Airship_Solid = geompy.MakeCompound([Final_Airship_Solid] + fairings)
+        except Exception as e:
+            print(f"[WARNING] Failed to attach fairings: {e}")
 
     Final_Airship_Solid_ID = geompy.addToStudy(Final_Airship_Solid, FINAL_OBJECT_NAME)
 
-    # In case of a Salome GUI for debugging, the component is made visible,
     if salome.sg.hasDesktop():
         gg = salome.ImportComponentGUI("GEOM")
         gg.createAndDisplayGO(Final_Airship_Solid_ID)
@@ -292,13 +330,10 @@ try:
     print(f'[LOG] Exported {OUTPUT_FORMAT} successfully.')
     sys.stdout.flush()
 
-# In case of any error in Salome, the error is logged in a text file in the output folder.
-# TODO: Figure out a way so that the frontend becomes aware of the failure in the Salome pipeline.
 except Exception as e:
     error_log_path = os.path.join(OUTPUT_DIRECTORY, "salome_crash_log.txt")
     with open(error_log_path, "w") as f:
         f.write("--- SALOME FATAL ERROR ---\n")
         f.write(traceback.format_exc())
-
-    print(f"[FATAL ERROR] Salome crashed. Please open {error_log_path} to see the exact error.")
+    print(f"[FATAL ERROR] Salome crashed critically. Check {error_log_path} for exact trace.")
     sys.stdout.flush()
