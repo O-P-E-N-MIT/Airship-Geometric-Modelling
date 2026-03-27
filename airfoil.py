@@ -93,6 +93,9 @@ class BaseFitter:
 
         # return xu, yu, xl, yl
 
+    def get_rsme_error(self):
+        return np.sqrt(np.mean((self.y_norm - self._fit_build(self.x_norm, self.parameters))**2))
+
 class CST(BaseFitter):
 
     def __init__(self, csv_filename):
@@ -121,7 +124,7 @@ class CST(BaseFitter):
 
         return y
 
-    def _fit_build(self, x, w, flw, N1, N2):
+    def _fit_build(self, x, w, flw=5, N1=0.5, N2=1):
         wu = w[:flw - 1]
         wl = w[flw - 1:-1]
         dz = w[-1] / 2
@@ -347,5 +350,18 @@ def get_airfoil_points(thickness=None, resolution=None, filename=None, method=No
             parsec_model = Parsec(filename)
             parsec_model.fit(resolution)
             return parsec_model.get_points(scale_factor, translation, rotation_angle)
+        else:
+            model = CST(filename)
+            model.fit(n_tries, resolution)
+
+            model2 = Parsec(filename)
+            model2.fit(resolution)
+
+            # If the error of cst model is high, parsec model is chosen.
+            # TODO: Instead of creating a separate functions to calculate the error, figure out a way to calculate the rsme from the fit() function itself.
+            if model.get_rsme_error() > model2.get_rsme_error():
+                model = model2
+
+            return model.get_points(scale_factor, translation, rotation_angle)
         
     raise Exception("GeometryHandlerError: Improper parameters provided for airfoil points.")

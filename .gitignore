@@ -17,3 +17,9 @@ test.py
 check.py
 new.py
 aerostat_test.py
+
+settings.json
+*.code-workspace
+
+*.foam
+openfoam/
