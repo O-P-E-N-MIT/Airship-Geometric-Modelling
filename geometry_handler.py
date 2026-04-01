@@ -419,35 +419,6 @@ class NACAEnvelope(Envelope):
         diameter = length / params[0]
         return NACAEnvelope(length, diameter, n)
 
-# Returns the half thickness of a symmetric NACA 4 digit airfoil.
-#
-# t = Maximum thickness as percentage of chord
-def naca_airfoil_half_thickness_at (t, x):
-    return 5 * t * (0.2969*x**0.5 - 0.1260*x - 0.3516*x**2 + 0.2843*x**3 - 0.1036*x**4)
-
-# Returns an array of points representing a symmetric NACA airfoil.
-#
-# NOTE: These points are linearly scalable with length.
-def naca_airfoil_points (t, n, l = 1):
-    t *= l/100
-
-    for i in range(n):
-        x = i / n
-        y = naca_airfoil_half_thickness_at(t, x)
-        yield l * x, y
-        
-    yield l, 0
-
-    # TODO: This is computing the same points for the lower surface again which maybe
-    # inefficient computation wise. If we were to create an array and return, it would 
-    # waste memory. Try to find a better solution for this.
-    for i in range(1, n-1):
-        x = 1 - i / n
-        y = naca_airfoil_half_thickness_at(t, x)
-        yield l * x, -y
-
-    yield 0, 0
-
 # Gets a common trilobe axis for both extreme and central lobe.
 def get_trilobe_axis (extreme_lobe, central_lobe, e):
     # Determining how long should the discretized X axis should be taken for calculation.
