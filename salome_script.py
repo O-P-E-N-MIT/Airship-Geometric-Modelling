@@ -4,7 +4,12 @@ ENVELOPE_LENGTH = 100
 ENVELOPE_PARAMS = (0.419, 0.337, 0.251, 0.651, 3.266)
 ENVELOPE_RESOLUTION = 100
 ENVELOPE_TRUNCATION_RATIO = 0
-ENVELOPE_SERIES = "GERTLER"
+ENVELOPE_SERIES = "DRAGON_DREAM"
+
+# --- DRAGON DREAM DEFAULTS ---
+HULL_WIDTH = 29.5
+HULL_HEIGHT = 14.0
+BOTTOM_FLATNESS = 0.25
 
 LOBE_NUMBER = 1
 LOBE_OFFSET_X = 13.333
@@ -102,7 +107,33 @@ try:
     sys.stdout.flush()
 
     def create_envelope(params, length):
-        if ENVELOPE_SERIES == "GERTLER":
+        if ENVELOPE_SERIES == "DRAGON_DREAM":
+            envelope_geom = geometry_handler.DragonDreamEnvelope(
+                length, HULL_WIDTH, HULL_HEIGHT, BOTTOM_FLATNESS
+            )
+
+            # 1. Base unit sphere
+            base_sphere = geompy.MakeSphereR(1.0)
+            origin = geompy.MakeVertex(0, 0, 0)
+
+            # 2. Scale into Tri-axial Ellipsoid
+            hull = geompy.MakeScaleAlongAxes(base_sphere, origin, length/2.0, HULL_WIDTH/2.0, HULL_HEIGHT/2.0)
+
+            # 3. Create Flat Bottom (Super Ellipse approximation via Boolean Cut)
+            cut_height = (HULL_HEIGHT / 2.0) * BOTTOM_FLATNESS
+            if cut_height > 0:
+                cut_box = geompy.MakeBoxDXDYDZ(length * 2, HULL_WIDTH * 2, cut_height)
+                # Shift box so its top face sits exactly where we want the cut
+                cut_box = geompy.MakeTranslation(cut_box, -length, -HULL_WIDTH, -(HULL_HEIGHT/2.0))
+                hull = geompy.MakeCutList(hull, [cut_box], True)
+
+            # 4. Shift hull so the Nose is at X=0, matching Gertler/NACA coordinate systems
+            envelope = geompy.MakeTranslation(hull, length/2.0, 0, 0)
+
+            return envelope_geom, envelope
+
+        # --- Axisymmetric Revolved Profiles ---
+        elif ENVELOPE_SERIES == "GERTLER":
             envelope_geom = geometry_handler.GertlerEnvelope.from_parameters(params, length, ENVELOPE_RESOLUTION)
         elif ENVELOPE_SERIES == "NACA":
             envelope_geom = geometry_handler.NACAEnvelope.from_parameters((params[4],), length, ENVELOPE_RESOLUTION)
@@ -165,12 +196,10 @@ try:
             axis_pt = geompy.MakeVertex(RC_AXIAL_OFFSET, 0, RC_RADIAL_OFFSET)
             rot_axis = geompy.MakeLineTwoPnt(axis_pt, geompy.MakeVertex(RC_AXIAL_OFFSET, 1, RC_RADIAL_OFFSET))
 
-            # FIX 1: Negate the angle! Salome right-hand rule around +Y makes a negative angle pitch UP.
-            # By negating it, we force the fin to pitch DOWN to follow the hull taper.
+            # Negate the angle to pitch DOWN
             fin = geompy.MakeRotation(fin, rot_axis, -angle)
 
-            # FIX 2: Apply a penetration margin. The curved hull will fall away from the flat edges of the thick fin.
-            # Sinking it guarantees a clean boolean union without floating gaps.
+            # Apply penetration margin
             FIN_PENETRATION_MARGIN = (FIN_THICKNESS / 100.0) * FIN_RC_LENGTH * 0.75
             fin = geompy.MakeTranslationVectorDistance(fin, OZ, -INTERCEPT_OFFSET - FIN_PENETRATION_MARGIN)
 
@@ -233,10 +262,6 @@ try:
                     scaled_z = np.array(AIRFOIL_Y) * chord
                     af_pts = zip(scaled_x, scaled_z)
                 else:
-                    # OLD:
-                    # af_pts = geometry_handler.naca_airfoil_points(WING_THICKNESS, FIN_SECTION_RESOLUTION, chord)
-
-                    # NEW:
                     x_c, z_c = airfoil.get_airfoil_points(thickness=WING_THICKNESS, resolution=FIN_SECTION_RESOLUTION, scale_factor=chord)
                     af_pts = zip(x_c, z_c)
 
