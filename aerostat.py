@@ -1,5 +1,4 @@
 import numpy as np
-
 from scipy.optimize import minimize_scalar
 
 # The ISA atmospheric model used here is modelled only for Troposphere and Tropopause which is enough for our case.
@@ -50,7 +49,7 @@ def get_net_lift (
         volume,                     # Volume of the envelope.
         total_mass,                 # Fixed mass of the aerostat.
         operational_height,         # Operational altitude of the envelope.
-        RH,                         # Relative Humidity (0-1).   
+        RH,                         # Relative Humidity (0-1).
         purity,                     # Purity of lifting gas.
         delta_P,                    # Increment in lifting gas pressure.
         delta_T,                    # Increment in lifting gas temperature.
@@ -77,7 +76,7 @@ def get_net_lift (
 def get_gas_mass (
         P, T,
         volume,                     # Volume of the envelope.
-        RH,                         # Relative Humidity (0-1).   
+        RH,                         # Relative Humidity (0-1).
         purity,                     # Purity of lifting gas.
         delta_P,                    # Increment in lifting gas pressure.
         delta_T,                    # Increment in lifting gas temperature.
@@ -96,7 +95,7 @@ def get_thermal_model (T_amb, solar_flux, absorptivity, emissivity, wind_speed):
     q_solar = solar_flux * absorptivity
     q_ir = emissivity * 5.67e-8 * (T_amb ** 4)
     T_env = T_amb + (q_solar - q_ir) / max(h_conv, 1e-3)
-    
+
     return T_env
 
 # Main class to perform all calculations for the Aerostat.
@@ -111,7 +110,7 @@ class AerostatHull:
             operational_height,             # Operational altitude of the envelope.
             deployment_height,              # Deployment altitude of the envelope.
             margin_height,                  # Margin for the pressure altitude.
-            RH,                             # Relative Humidity (0-1).   
+            RH,                             # Relative Humidity (0-1).
             purity,                         # Purity of lifting gas.
             delta_P,                        # Increment in lifting gas pressure.
             delta_T,                        # Increment in lifting gas temperature.
@@ -125,21 +124,27 @@ class AerostatHull:
             fin_thickness=0,                # Ratio of fin thickness to chord ratio of the NACA airfoil to be used.
             fin_density=0,                  # Density of the fin material (kg/m^3).
             fin_number=1,                   # Fin number.
+            has_wings=False,                # Wing toggle.
+            wing_span=0,                    # Wing span.
+            wing_root_chord=0,              # Wing root chord.
+            wing_tip_chord=0,               # Wing tip chord.
+            wing_thickness=0,               # Wing thickness %.
+            wing_density=10.0,              # Wing density (kg/m^3).
             ballonet_number=2,              # Number of ballonets.
             ballonet_shape="THREE_QUARTER", # Ballonet shape.
             ballonet_fabric_density=0.35,   # Ballonet fabric density (kg/m^2).
             tether_density=0,               # Density of the tether used (kg/m).
             tether_fraction=1,              # Fraction of tether weight carried.
-            cte=2.3e-5, 
-            max_temp=323.15, 
+            cte=2.3e-5,
+            max_temp=323.15,
             min_temp=233.15,
             base_strength=75.0,             # Base strength of envelope (MPa)
             temp_derating=0.15,
-            fatigue_factor=0.995, 
+            fatigue_factor=0.995,
             uv_degradation=0.02,
-            solar_flux=1000, 
-            emissivity=0.8, 
-            absorptivity=0.3, 
+            solar_flux=1000,
+            emissivity=0.8,
+            absorptivity=0.3,
             wind_speed=5
     ):
         P_dep, T_dep = get_atmospheric_properties(deployment_height)
@@ -176,7 +181,7 @@ class AerostatHull:
         self.base_strength = base_strength
         self.temp_derating = temp_derating
         self.skin_thickness = skin_thickness
-        self.solar_flux = solar_flux 
+        self.solar_flux = solar_flux
         self.emissivity = emissivity
         self.absorptivity = absorptivity
         self.wind_speed = wind_speed
@@ -185,57 +190,18 @@ class AerostatHull:
         self.tether_density = tether_density * tether_fraction
 
         # Ballonet fabric mass per unit volume of envelope^2/3
-        self.ballonet_fabric_mass = BALLONET_SHAPE_FACTOR.get(ballonet_shape, 3) * ballonet_fabric_density * (np.pi * ballonet_number)**(1/3) * (1 - self.inflation_fraction_deploy)**(2/3) 
+        self.ballonet_fabric_mass = BALLONET_SHAPE_FACTOR.get(ballonet_shape, 3) * ballonet_fabric_density * (np.pi * ballonet_number)**(1/3) * (1 - self.inflation_fraction_deploy)**(2/3)
 
-        # TODO: Modify the formula to take account for FIN_TIP_ANGLE.
+        # Fin mass calculation
         self.fin_mass = 0.0393 * fin_thickness*1e-2 * fin_rc**2 * fin_height * fin_density * (fin_taper_ratio + (fin_taper_ratio - 1)**2 / 3) * fin_number
 
-    def initialise_from_operational_altitude (self, volume_bounds, target_lift=0):
-        envelope, convergence = self.get_envelope_from_target(target_lift, self.operational_altitude, volume_bounds)
-        self.envelope = envelope
-        return envelope, convergence
-
-    def get_envelope_from_target (self, target_lift, target_altitude, volume_bounds):
-        envelope = self.envelope.copy()
-        lobe_number = self.lobe_number
-        e, f, g = self.multi_lobe_distances
-        skin_density = self.skin_density
-        ballonet_mass = self.ballonet_fabric_mass
-        additional_mass = self.additional_mass + self.fin_mass + self.tether_density * target_altitude
-        min_volume, max_volume = volume_bounds
-
-        # TODO: Figure out a method to figure out an initial guess and use that to use fsolve instead of using root_scalar
-        # which requires us to ask the user for a maximum volume bound.
-        min_length = envelope.set_volume(min_volume or 1e-3, lobe_number, e, f, g).length
-        max_length = envelope.set_volume(max_volume, lobe_number, e, f, g).length
-
-        # This has been done because surface area and volume calculations are done by using different methods for different
-        # configurations of airship. Using an if branch statement inside a function which is to be optimised may take a hit on
-        # performance so the function used is changed based on the configuration.
-        if lobe_number == 1:
-            def func (l):
-                envelope.set_length(l or 1e-3)
-                volume_iter = envelope.volume()
-                mass_iter = skin_density * envelope.surface_area() + ballonet_mass * volume_iter**(2/3) + additional_mass
-                l = get_net_lift(volume_iter, mass_iter, target_altitude, *self.gas_properties)
-                return abs(l - target_lift)
-        elif lobe_number == 2:
-            def func (l):
-                envelope.set_length(l or 1e-3)
-                volume_iter = envelope.volume_bilobe(f)
-                mass_iter = skin_density * envelope.surface_area_bilobe(f) + ballonet_mass * volume_iter**(2/3) + additional_mass
-                l = get_net_lift(volume_iter, mass_iter, target_altitude, *self.gas_properties)
-                return abs(l - target_lift)
-        else:
-            def func (l):
-                envelope.set_length(l or 1e-3)
-                volume_iter = envelope.volume_trilobe(e, f, g)
-                mass_iter = skin_density * envelope.surface_area_trilobe(e, f, g) + ballonet_mass * volume_iter**(2/3) + additional_mass
-                l = get_net_lift(volume_iter, mass_iter, target_altitude, *self.gas_properties)
-                return abs(l - target_lift)
-
-        sol = minimize_scalar(func, bounds=(min_length, max_length), method='bounded', options={'xatol': 1e-8})
-        return envelope, sol.fun
+        # Wing mass calculation
+        self.wing_mass = 0
+        if has_wings:
+            total_planform = 0.5 * (wing_root_chord + wing_tip_chord) * wing_span
+            avg_chord = (wing_root_chord + wing_tip_chord) / 2
+            wing_vol = total_planform * (avg_chord * (wing_thickness / 100.0))
+            self.wing_mass = wing_vol * wing_density
 
     def get_properties (self, n=None, include_tether=True):
         # If number of points to be taken for altitude is not given,
@@ -280,6 +246,7 @@ class AerostatHull:
         total_mass = (self.skin_density * surface_area +
                       self.additional_mass +
                       self.fin_mass +
+                      self.wing_mass +
                       current_tether_mass +                 # Conditionally applied tether weight
                       ballonet_mass)
 
@@ -300,8 +267,8 @@ class AerostatHull:
 
         # Total stress acting on the envelope skin due to both thermal and pressure effects (in MPa).
         sigma = (
-            self.cte * (T_env - T) * self.base_strength                             # Thermal stress on the envelope
-            + delta_P * self.envelope.diameter / (4 * self.skin_thickness) * 1e-6   # Hoop stress from the pressure difference
+                self.cte * (T_env - T) * self.base_strength                             # Thermal stress on the envelope
+                + delta_P * self.envelope.diameter / (4 * self.skin_thickness) * 1e-6   # Hoop stress from the pressure difference
         )
 
         # Temperature derating on material strength.
@@ -311,7 +278,61 @@ class AerostatHull:
         sigma *= derating
 
         return h, Ln, Lg, I, BV, sigma, volume, surface_area
-    
+
+    def initialise_from_operational_altitude(self, bounds, target_lift=0.0):
+        # Extract static atmospheric properties at operational altitude
+        P_op, T_op = get_atmospheric_properties(self.operational_altitude)
+        RH, purity, delta_P, delta_T, gas_constant, _ = self.gas_properties
+        e_vap = get_vapour_pressure(T_op, RH)
+
+        I_op = self.inflation_fraction_oper
+        rho_lg = purity * (P_op + delta_P) / (gas_constant * (T_op + delta_T))
+        rho_ba = P_op / (287 * T_op)
+
+        tether_mass_op = self.tether_density * self.operational_altitude
+
+        def objective(L):
+            self.envelope.set_length(L)
+
+            # Calculate volume and surface area dynamically as length changes
+            if self.lobe_number == 1:
+                vol = self.envelope.volume()
+                surf = self.envelope.surface_area()
+            elif self.lobe_number == 2:
+                vol = self.envelope.volume_bilobe(self.multi_lobe_distances[1])
+                surf = self.envelope.surface_area_bilobe(self.multi_lobe_distances[1])
+            else:
+                vol = self.envelope.volume_trilobe(*self.multi_lobe_distances)
+                surf = self.envelope.surface_area_trilobe(*self.multi_lobe_distances)
+
+            ballonet_mass = self.ballonet_fabric_mass * vol**(2/3)
+
+            # Support wings safely
+            wing_m = getattr(self, 'wing_mass', 0)
+
+            total_mass = (self.skin_density * surf +
+                          self.additional_mass +
+                          self.fin_mass +
+                          wing_m +
+                          tether_mass_op +
+                          ballonet_mass)
+
+            Lg = K * vol * (P_op - (1-RDWV)*e_vap) / T_op
+            Ln = Lg - (rho_lg * I_op * vol + rho_ba * (1 - I_op) * vol + total_mass) * ag
+
+            # We want to minimize the absolute difference between actual lift and target lift
+            return abs(Ln - target_lift)
+
+        # Cap the max search length to 1000m to prevent OverflowErrors during optimization
+        search_bounds = (max(1.0, bounds[0]), min(1000.0, bounds[1]))
+
+        # Minimize the difference to find the perfect length
+        res = minimize_scalar(objective, bounds=search_bounds, method='bounded', options={'xatol': 1e-4})
+
+        # Set the envelope to the newly optimized length and return
+        self.envelope.set_length(res.x)
+        return self.envelope, res.fun
+
     # This function calculates the burst altitude beyond the maximum operational altitude to find the factor of safety.
     # NOTE: Given the atmosphere is limited upto 20km, the burst altitude cannot be calculate beyond that.
     def get_burst_altitude (self, safety_factor=2):
@@ -323,7 +344,7 @@ class AerostatHull:
             T_env = get_thermal_model(T, self.solar_flux, self.absorptivity, self.emissivity, self.wind_speed)
 
             # Thermal stress
-            thermal_strain = self.cte * (T_env - T) 
+            thermal_strain = self.cte * (T_env - T)
             thermal_stress = thermal_strain * self.base_strength
 
             # Hoop stress from pressure difference (thin shell, approximate spherical/prolate).
@@ -345,54 +366,12 @@ class AerostatHull:
         # If the burst altitude is beyond 20km, it returns 20km as the burst altitude.
         except ValueError:
             return 20000
-    
+
 # A unique number which when multiplied by anything will end up giving 1.
 class UnitMultiplier:
 
     def __mul__(self, other):
         return 1
-    
+
     def __rmul__(self, other):
         return 1
-
-# Testing
-
-# from geometry_handler import GertlerEnvelope, STANDARD_ENVELOPES
-# aerostat = AerostatHull(
-#         GertlerEnvelope.from_parameters(STANDARD_ENVELOPES["NPL"], 1),
-#         additional_mass=150+70,
-#         skin_thickness=1e-3,
-#         skin_density=.75,
-#         operational_height=4500,
-#         deployment_height=0,
-#         margin_height=500,
-#         RH=.7,
-#         purity=.97,
-#         delta_P=500,
-#         delta_T=5,
-#         gas_constant=2077,
-#         lobe_number=1,
-#         e=0,
-#         f=0,
-#         g=0
-# )
-
-# envv, conv = aerostat.initialise_from_operational_altitude([0, 50000])
-# print(aerostat.get_properties())
-# print(f"Aerostat length: {envv.length} {conv}")
-
-# print(f"Burst Altitude: {aerostat.get_burst_altitude()}")
-
-# h, Ln, Lg, I, BV, total_stress = aerostat.get_properties()
-
-# import matplotlib.pyplot as plt
-
-# # Plot
-# plt.plot(h, total_stress)
-# plt.title("Total Stress")
-# plt.xlabel("Altitude")
-# plt.ylabel("Total Stress")
-# plt.grid(True)
-
-# # Show graph
-# plt.show()
