@@ -287,6 +287,49 @@ class Envelope:
         envelope.set_volume(volume, lobe_number, e, f, g)
         return envelope
 
+class DragonDreamEnvelope(Envelope):
+    def __init__(self, length, width, height, bottom_flatness, n=100):
+        self.length = length
+        self.width = width
+        self.height = height
+        self.bottom_flatness = bottom_flatness # 0 to 1 (1 = fully flat at axis)
+        # We define "diameter" as the max vertical dimension for hoop stress estimations in aerostat.py
+        diameter = height
+        super().__init__(length, diameter, n)
+
+    def at(self, x):
+        # Returns the Z-height of the top ellipsoid at a given X for fin/wing placement.
+        # X is from 0 to L. Center is at L/2.
+        x_local = x - (self.length / 2.0)
+        a = self.length / 2.0
+        c = self.height / 2.0
+
+        # Ellipse equation: (x/a)^2 + (z/c)^2 = 1 -> z = c * sqrt(1 - (x/a)^2)
+        if abs(x_local) > a:
+            return 0.0
+        return c * np.sqrt(1 - (x_local / a)**2)
+
+    def volume(self):
+        # Volume of standard tri-axial ellipsoid: 4/3 * pi * a * b * c
+        a = self.length / 2.0
+        b = self.width / 2.0
+        c = self.height / 2.0
+        full_vol = (4.0 / 3.0) * np.pi * a * b * c
+
+        # Approximate reduction for the flat bottom
+        reduction_factor = 1.0 - (0.5 * self.bottom_flatness)
+        return full_vol * reduction_factor
+
+    def surface_area(self):
+        # Knud Thomsen's formula for ellipsoid surface area approximation
+        a, b, c = self.length / 2.0, self.width / 2.0, self.height / 2.0
+        p = 1.6075
+        area = 4 * np.pi * (((a*b)**p + (a*c)**p + (b*c)**p) / 3.0)**(1/p)
+        return area * (1.0 - (0.2 * self.bottom_flatness)) # Rough reduction for flattened bottom
+
+    def side_projected_area(self):
+        return np.pi * (self.length / 2.0) * (self.height / 2.0)
+
 class GertlerEnvelope(Envelope):
 
     # Input variables for Gertler Envelope
