@@ -81,23 +81,15 @@ try:
 
     # --- TOPOLOGY SAFEGUARD ---
     def safe_polyline(pts, is_closed=True):
-        clean_pts = []
-        for p in pts:
-            if not clean_pts:
-                clean_pts.append(p)
-            else:
-                c1 = geompy.PointCoordinates(p)
-                c2 = geompy.PointCoordinates(clean_pts[-1])
-                if math.sqrt(sum((a-b)**2 for a, b in zip(c1, c2))) > 1e-6:
-                    clean_pts.append(p)
-
-        if is_closed and len(clean_pts) > 2:
-            c1 = geompy.PointCoordinates(clean_pts[0])
-            c2 = geompy.PointCoordinates(clean_pts[-1])
+        # We MUST NOT delete internal points, or tapered lofting will crash due to vertex mismatch.
+        # We only delete the very last point if it is an exact duplicate of the first point (Trailing Edge).
+        if is_closed and len(pts) > 2:
+            c1 = geompy.PointCoordinates(pts[0])
+            c2 = geompy.PointCoordinates(pts[-1])
             if math.sqrt(sum((a-b)**2 for a, b in zip(c1, c2))) < 1e-6:
-                clean_pts = clean_pts[:-1]
+                pts = pts[:-1]
 
-        return geompy.MakePolyline(clean_pts, is_closed)
+        return geompy.MakePolyline(pts, is_closed)
 
     def translate_object(object, x_offset, y_offset, z_offset):
         return geompy.MakeTranslationTwoPoints(object, O, geompy.MakeVertex(x_offset * LOBE_OFFSET_X, y_offset * LOBE_OFFSET_Y, z_offset * LOBE_OFFSET_Z))
@@ -220,74 +212,106 @@ try:
 
     # --- Modelling of Wings ---
     wings = []
-    if INCLUDE_WINGS and WING_SPAN > 0:
-        print('[LOG] Generating wings...')
+    if INCLUDE_WINGS and 'WING_STATIONS' in globals() and len(WING_STATIONS) > 1:
+        print('[LOG] Starting Arc-Length Standardized Wing Generation...')
         sys.stdout.flush()
 
         try:
+            # 1. Calculate Hull Penetration
             WING_ROOT_RADIUS = extreme_envelope_geom.at(WING_AXIAL_OFFSET)
+            root_chord = WING_STATIONS[0]['chord']
+
             try:
-                _, _, WING_INTERCEPT = extreme_envelope_geom.get_chord_intercept(WING_AXIAL_OFFSET, WING_ROOT_CHORD)
-            except Exception:
+                _, _, WING_INTERCEPT = extreme_envelope_geom.get_chord_intercept(WING_AXIAL_OFFSET, root_chord)
+            except:
                 WING_INTERCEPT = 0.0
 
-            PENETRATION_MARGIN = (WING_ROOT_CHORD * 0.15) + ((WING_THICKNESS / 100.0) * WING_ROOT_CHORD)
+            # Push the root into the hull slightly to ensure Boolean Fusion works later
+            PENETRATION_MARGIN = (root_chord * 0.25)
             WING_START_Y = max(0, WING_ROOT_RADIUS - WING_INTERCEPT - PENETRATION_MARGIN)
-
-            n_span = 10
-            y_stations = np.linspace(0, WING_SPAN/2, n_span)
-
-            taper = WING_TIP_CHORD / WING_ROOT_CHORD if WING_ROOT_CHORD > 0 else 0
-            c_dist = WING_ROOT_CHORD * (1 - (1 - taper) * (2 * y_stations / WING_SPAN))
-            x_le = y_stations * np.tan(np.radians(WING_SWEEP))
-            z_shift = y_stations * np.tan(np.radians(WING_DIHEDRAL))
 
             wires_right = []
             wires_left = []
 
-            use_custom_airfoil = 'AIRFOIL_X' in globals() and 'AIRFOIL_Y' in globals() and len(AIRFOIL_X) > 5
+            for i, station in enumerate(WING_STATIONS):
+                y_val = station['y'] + WING_START_Y
+                chord = station['chord']
+                twist = np.radians(station['twist'])
+                x_le = station['x_off']
+                z_shift = station['z_off']
 
-            for i in range(len(y_stations)):
-                chord = c_dist[i]
-                span_half = WING_SPAN/2 if WING_SPAN > 0 else 1
-                theta_val = WING_TWIST_ROOT + (WING_TWIST_TIP - WING_TWIST_ROOT) * (y_stations[i] / span_half)
-                twist = np.radians(theta_val)
-                y_val = y_stations[i] + WING_START_Y
+                x_norm = np.array(WING_AIRFOILS_X[i])
+                z_norm = np.array(WING_AIRFOILS_Y[i])
 
-                pts_right = []
-                pts_left = []
+                # --- THE ARC-LENGTH NORMALIZER ---
+                # 1. Remove duplicate TE points explicitly
+                if math.hypot(x_norm[0] - x_norm[-1], z_norm[0] - z_norm[-1]) < 1e-6:
+                    x_norm = x_norm[:-1]
+                    z_norm = z_norm[:-1]
 
-                if use_custom_airfoil:
-                    scaled_x = np.array(AIRFOIL_X) * chord
-                    scaled_z = np.array(AIRFOIL_Y) * chord
-                    af_pts = zip(scaled_x, scaled_z)
-                else:
-                    x_c, z_c = airfoil.get_airfoil_points(thickness=WING_THICKNESS, resolution=FIN_SECTION_RESOLUTION, scale_factor=chord)
-                    af_pts = zip(x_c, z_c)
+                # 2. Force the Trailing Edge (Max X) to be the absolute starting point
+                te_idx = np.argmax(x_norm)
+                x_norm = np.roll(x_norm, -te_idx)
+                z_norm = np.roll(z_norm, -te_idx)
 
-                for x_af, z_af in af_pts:
+                # 3. Standardize direction (Counter-Clockwise over the top)
+                area = np.sum((np.roll(x_norm, -1) - x_norm) * (np.roll(z_norm, -1) + z_norm))
+                if area < 0:
+                    x_norm = np.concatenate(([x_norm[0]], x_norm[1:][::-1]))
+                    z_norm = np.concatenate(([z_norm[0]], z_norm[1:][::-1]))
+
+                # 4. Reparameterize by arc-length to guarantee 1-to-1 vertex mapping
+                x_closed = np.append(x_norm, x_norm[0])
+                z_closed = np.append(z_norm, z_norm[0])
+
+                dx = np.diff(x_closed)
+                dz = np.diff(z_closed)
+                dist = np.sqrt(dx**2 + dz**2)
+                s = np.zeros(len(x_closed))
+                s[1:] = np.cumsum(dist)
+
+                if s[-1] > 0:
+                    s /= s[-1]
+
+                # Resample to exactly 120 points evenly spaced around the perimeter
+                s_uniform = np.linspace(0, 1, 120)
+                x_norm = np.interp(s_uniform, s, x_closed)
+                z_norm = np.interp(s_uniform, s, z_closed)
+
+                # Remove the duplicate TE so MakePolyline can close it cleanly
+                x_norm = x_norm[:-1]
+                z_norm = z_norm[:-1]
+                # ---------------------------------
+
+                pts_r, pts_l = [], []
+                for j in range(len(x_norm)):
+                    x_af = x_norm[j] * chord
+                    z_af = z_norm[j] * chord
+
+                    # Apply twist around aerodynamic center (0.25c)
                     x_qc = 0.25 * chord
                     x_shift_val = x_af - x_qc
-
                     x_rot = x_shift_val * np.cos(twist) + z_af * np.sin(twist)
                     z_rot = -x_shift_val * np.sin(twist) + z_af * np.cos(twist)
                     x_rot += x_qc
 
-                    X_final = WING_AXIAL_OFFSET + x_rot + x_le[i]
-                    Z_final = z_rot + z_shift[i]
+                    X_f, Z_f = WING_AXIAL_OFFSET + x_rot + x_le, z_rot + z_shift
+                    pts_r.append(geompy.MakeVertex(X_f, y_val, Z_f))
+                    pts_l.append(geompy.MakeVertex(X_f, -y_val, Z_f))
 
-                    pts_right.append(geompy.MakeVertex(X_final, y_val, Z_final))
-                    pts_left.append(geompy.MakeVertex(X_final, -y_val, Z_final))
+                wires_right.append(safe_polyline(pts_r, True))
+                wires_left.append(safe_polyline(pts_l, True))
 
-                wires_right.append(safe_polyline(pts_right, True))
-                wires_left.append(safe_polyline(pts_left, True))
+            # --- RULED LOFTING ---
+            # Using 'False' ensures straight structural lofts between identical topological wire grids
+            wing_right = geompy.MakeThruSections(wires_right, True, 0.0001, False)
+            wing_left = geompy.MakeThruSections(wires_left, True, 0.0001, False)
 
-            wing_right = geompy.MakeThruSections(wires_right, True, 0.0001, True)
-            wing_left = geompy.MakeThruSections(wires_left, True, 0.0001, True)
             wings = [wing_right, wing_left]
+            print(f"[SUCCESS] Wings lofted successfully.")
 
         except Exception as e:
-            print(f"[WARNING] Wing generation failed and was skipped: {e}")
+            print(f"[CRITICAL ERROR] Wing generation failed: {traceback.format_exc()}")
             sys.stdout.flush()
     else:
         print('[LOG] Skipping wing generation...')
