@@ -11,9 +11,10 @@ from PySide6.QtWidgets import (
     QHBoxLayout, QGridLayout, QLabel, QLineEdit, QPushButton,
     QComboBox, QSlider, QGroupBox, QFileDialog, QTextEdit,
     QButtonGroup, QCheckBox, QMessageBox, QSplitter, QTableWidget,
-    QTableWidgetItem, QHeaderView, QScrollArea, QSizePolicy
+    QTableWidgetItem, QHeaderView, QScrollArea, QSizePolicy, QListWidget, QInputDialog
 )
 from pyvistaqt import BackgroundPlotter
+from airfoil import get_airfoil_points, scan_airfoil_directory
 
 # Integration of balloon.py
 from balloon import create_balloon_geometry
@@ -436,147 +437,331 @@ class AirshipGUI(QMainWindow):
         main_layout = QVBoxLayout(self.wing_tab)
         main_layout.setContentsMargins(15, 15, 15, 15)
 
-        wing_dim_group = QGroupBox("Wing Parameters")
+        wing_dim_group = QGroupBox("Wing Placement & Defaults")
         w_layout = QGridLayout(wing_dim_group)
-        self.inputs["WING_SPAN"] = LabeledSlider("Span (m)", 5.0, 100.0, 20.0, 0.1, 2)
-        self.inputs["WING_ROOT_CHORD"] = LabeledSlider("Root Chord (Cr)", 1.0, 20.0, 5.0, 0.1, 2)
-        self.inputs["WING_TIP_CHORD"] = LabeledSlider("Tip Chord (Ct)", 0.1, 20.0, 2.0, 0.1, 2)
-        self.inputs["WING_SWEEP"] = LabeledSlider("Sweep (Deg)", 0.0, 45.0, 15.0, 0.1, 2)
-        self.inputs["WING_DIHEDRAL"] = LabeledSlider("Dihedral (Deg)", -10.0, 30.0, 5.0, 0.1, 2)
-        self.inputs["WING_TWIST_ROOT"] = LabeledSlider("Root Twist (Deg)", -10.0, 15.0, 2.0, 0.1, 2)
-        self.inputs["WING_TWIST_TIP"] = LabeledSlider("Tip Twist (Deg)", -10.0, 15.0, -2.0, 0.1, 2)
-        self.inputs["WING_THICKNESS"] = LabeledSlider("Thickness (%)", 5.0, 25.0, 12.0, 0.1, 2)
-        self.inputs["WING_AXIAL_OFFSET"] = LabeledSlider("Axial Pos (m)", 0.0, 200.0, 40.0, 0.1, 2)
-
-        w_layout.addWidget(self.inputs["WING_SPAN"], 0, 0)
-        w_layout.addWidget(self.inputs["WING_ROOT_CHORD"], 0, 1)
-        w_layout.addWidget(self.inputs["WING_TIP_CHORD"], 0, 2)
-        w_layout.addWidget(self.inputs["WING_SWEEP"], 1, 0)
-        w_layout.addWidget(self.inputs["WING_DIHEDRAL"], 1, 1)
-        w_layout.addWidget(self.inputs["WING_THICKNESS"], 1, 2)
-        w_layout.addWidget(self.inputs["WING_TWIST_ROOT"], 2, 0)
-        w_layout.addWidget(self.inputs["WING_TWIST_TIP"], 2, 1)
-        w_layout.addWidget(self.inputs["WING_AXIAL_OFFSET"], 2, 2)
-
+        self.inputs["WING_AXIAL_OFFSET"] = LabeledSlider("Root Axial Pos (m)", 0.0, 200.0, 40.0, 0.1, 2)
+        self.inputs["WING_THICKNESS"] = LabeledSlider("Default Thickness (%)", 5.0, 25.0, 12.0, 0.1, 2)
+        w_layout.addWidget(self.inputs["WING_AXIAL_OFFSET"], 0, 0)
+        w_layout.addWidget(self.inputs["WING_THICKNESS"], 0, 1)
         main_layout.addWidget(wing_dim_group)
-        main_layout.addStretch(1)
 
-    # --- NEW METHOD: AIRFOIL TAB IMPLEMENTATION ---
+        # Dynamic Stations Table
+        station_group = QGroupBox("Wing Stations (Root to Tip)")
+        s_layout = QVBoxLayout(station_group)
+
+        self.wing_table = QTableWidget(0, 6) # Reverted back to 6 columns
+        self.wing_table.setHorizontalHeaderLabels(["Y (Span)", "Chord", "Twist (°)", "Sweep Offset (X)", "Dihedral Offset (Z)", "Airfoil"])
+        self.wing_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.wing_table.setStyleSheet("QTableWidget { background-color: #2D2D2D; color: #FFFFFF; }")
+
+        btn_layout = QHBoxLayout()
+        self.btn_add_station = QPushButton("+ Add Station")
+        self.btn_add_station.setStyleSheet("background-color: #3C3C3C; color: #00BFFF; font-weight: bold;")
+        self.btn_rem_station = QPushButton("- Remove Station")
+
+        self.btn_add_station.clicked.connect(lambda: self._add_wing_station())
+        self.btn_rem_station.clicked.connect(self._remove_wing_station)
+
+        btn_layout.addWidget(self.btn_add_station)
+        btn_layout.addWidget(self.btn_rem_station)
+
+        s_layout.addLayout(btn_layout)
+        s_layout.addWidget(self.wing_table)
+        main_layout.addWidget(station_group, 1)
+
+        # Initialize with standard Root and Tip
+        self._add_wing_station(0.0, 5.0, 2.0, 0.0, 0.0)
+        self._add_wing_station(10.0, 2.0, -2.0, 2.58, 0.87)
+
+    def _add_wing_station(self, y=0.0, c=1.0, t=0.0, x=0.0, z=0.0):
+        row = self.wing_table.rowCount()
+        self.wing_table.insertRow(row)
+        self.wing_table.setItem(row, 0, QTableWidgetItem(f"{y:.2f}"))
+        self.wing_table.setItem(row, 1, QTableWidgetItem(f"{c:.2f}"))
+        self.wing_table.setItem(row, 2, QTableWidgetItem(f"{t:.2f}"))
+        self.wing_table.setItem(row, 3, QTableWidgetItem(f"{x:.2f}"))
+        self.wing_table.setItem(row, 4, QTableWidgetItem(f"{z:.2f}"))
+
+        # Airfoil Selector (Pulls directly from the Airfoil Workspace)
+        combo = QComboBox()
+        if hasattr(self, 'airfoil_library'):
+            combo.addItems(list(self.airfoil_library.keys()))
+        self.wing_table.setCellWidget(row, 5, combo)
+
+    def _sync_wing_dropdowns(self):
+        """Called whenever the Airfoil Library changes to update the Wing table without wiping selections."""
+        if not hasattr(self, 'wing_table'): return
+        for row in range(self.wing_table.rowCount()):
+            combo = self.wing_table.cellWidget(row, 5)
+            if combo:
+                current = combo.currentText()
+                combo.blockSignals(True)
+                combo.clear()
+                if hasattr(self, 'airfoil_library'):
+                    combo.addItems(list(self.airfoil_library.keys()))
+                    if current in self.airfoil_library:
+                        combo.setCurrentText(current)
+                combo.blockSignals(False)
+
+    def _remove_wing_station(self):
+        row = self.wing_table.rowCount()
+        if row > 2:  # Prevent removing the last 2 stations (need at least root and tip)
+            self.wing_table.removeRow(row - 1)
+
     def setup_airfoil_tab(self):
-        layout = QHBoxLayout(self.airfoil_tab)
+        # Initialize the Central Asset Library
+        self.airfoil_library = {}
 
-        controls_group = QGroupBox("Airfoil Parameters")
-        controls_layout = QVBoxLayout()
+        main_layout = QVBoxLayout(self.airfoil_tab)
+        self.airfoil_splitter = QSplitter(Qt.Horizontal)
 
-        mode_layout = QGridLayout()
-        self.inputs["AIRFOIL_MODE"] = QComboBox()
-        self.inputs["AIRFOIL_MODE"].setObjectName("LargeDropdown")
-        self.inputs["AIRFOIL_MODE"].addItems(["NACA 4-Digit Symmetric", "From CSV File"])
-        self.inputs["AIRFOIL_MODE"].currentIndexChanged.connect(self._toggle_airfoil_inputs)
-        mode_layout.addWidget(QLabel("Generation Mode:"), 0, 0)
-        mode_layout.addWidget(self.inputs["AIRFOIL_MODE"], 0, 1)
-        controls_layout.addLayout(mode_layout)
+        # --- LEFT PANE (The Asset Manager Workspace) ---
+        left_pane = QWidget()
+        left_layout = QVBoxLayout(left_pane)
 
-        self.naca_group = QWidget()
-        naca_l = QVBoxLayout(self.naca_group)
-        naca_l.setContentsMargins(0, 0, 0, 0)
-        self.inputs["AIRFOIL_THICKNESS"] = LabeledSlider("Max Thickness (%)", 1.0, 50.0, 12.0, 0.1, 1)
-        naca_l.addWidget(self.inputs["AIRFOIL_THICKNESS"])
-        controls_layout.addWidget(self.naca_group)
+        self.airfoil_list = QListWidget()
+        self.airfoil_list.setStyleSheet("background-color: #2D2D2D; color: #00BFFF; font-weight: bold; font-size: 11pt;")
+        self.airfoil_list.currentItemChanged.connect(self._on_airfoil_selected)
 
-        self.file_group = QWidget()
-        file_l = QGridLayout(self.file_group)
-        file_l.setContentsMargins(0, 0, 0, 0)
-        self.inputs["AIRFOIL_FILE"] = QLineEdit()
-        self.btn_browse_airfoil = QPushButton("Browse CSV")
-        self.btn_browse_airfoil.clicked.connect(self._browse_airfoil_file)
-        self.inputs["AIRFOIL_METHOD"] = QComboBox()
-        self.inputs["AIRFOIL_METHOD"].addItems(["cst", "parsec"])
+        btn_layout = QHBoxLayout()
+        self.btn_import_files = QPushButton("Import .dat Files")
+        self.btn_import_files.setStyleSheet("background-color: #3C3C3C; font-weight: bold;")
+        self.btn_import_files.clicked.connect(self._import_airfoil_files)
 
-        file_l.addWidget(QLabel("File Path:"), 0, 0)
-        file_l.addWidget(self.inputs["AIRFOIL_FILE"], 0, 1)
-        file_l.addWidget(self.btn_browse_airfoil, 0, 2)
-        file_l.addWidget(QLabel("Fitting Method:"), 1, 0)
-        file_l.addWidget(self.inputs["AIRFOIL_METHOD"], 1, 1, 1, 2)
-        self.file_group.hide()
-        controls_layout.addWidget(self.file_group)
+        self.btn_add_naca = QPushButton("+ Add NACA")
+        self.btn_add_naca.clicked.connect(self._add_naca_profile)
 
-        common_group = QGroupBox("Transformations & Resolution")
-        common_l = QVBoxLayout(common_group)
-        self.inputs["AIRFOIL_RES"] = LabeledSlider("Resolution", 10, 500, 100, 1, 0)
-        self.inputs["AIRFOIL_SCALE"] = LabeledSlider("Scale Factor", 0.01, 10.0, 1.0, 0.01, 2)
-        self.inputs["AIRFOIL_TX"] = LabeledSlider("Translation X", -50.0, 50.0, 0.0, 0.01, 2)
-        self.inputs["AIRFOIL_TY"] = LabeledSlider("Translation Y", -50.0, 50.0, 0.0, 0.01, 2)
-        self.inputs["AIRFOIL_ROT"] = LabeledSlider("Rotation Angle (°)", -180.0, 180.0, 0.0, 0.1, 1)
+        btn_layout.addWidget(self.btn_import_files)
+        btn_layout.addWidget(self.btn_add_naca)
 
-        common_l.addWidget(self.inputs["AIRFOIL_RES"])
-        common_l.addWidget(self.inputs["AIRFOIL_SCALE"])
-        common_l.addWidget(self.inputs["AIRFOIL_TX"])
-        common_l.addWidget(self.inputs["AIRFOIL_TY"])
-        common_l.addWidget(self.inputs["AIRFOIL_ROT"])
-        controls_layout.addWidget(common_group)
+        self.btn_remove_airfoil = QPushButton("- Remove Selected")
+        self.btn_remove_airfoil.setStyleSheet("color: #FF6347;")
+        self.btn_remove_airfoil.clicked.connect(self._remove_airfoil)
 
-        self.btn_gen_airfoil = QPushButton("GENERATE & PREVIEW AIRFOIL")
-        self.btn_gen_airfoil.setMinimumHeight(40)
-        self.btn_gen_airfoil.setStyleSheet("background-color: #00BFFF; color: #1e1e1e; font-weight: bold;")
-        self.btn_gen_airfoil.clicked.connect(self._generate_and_plot_airfoil)
-        controls_layout.addWidget(self.btn_gen_airfoil)
-        controls_layout.addStretch()
+        left_layout.addWidget(QLabel("Imported Airfoil Library:"))
+        left_layout.addWidget(self.airfoil_list)
+        left_layout.addLayout(btn_layout)
+        left_layout.addWidget(self.btn_remove_airfoil)
 
-        controls_group.setLayout(controls_layout)
-        layout.addWidget(controls_group, 1)
+        # --- RIGHT PANE (Editor & Preview) ---
+        right_pane = QWidget()
+        right_layout = QVBoxLayout(right_pane)
 
-        plot_group = QGroupBox("Airfoil Preview")
+        self.af_editor_group = QGroupBox("Selected Airfoil Properties")
+        editor_layout = QGridLayout(self.af_editor_group)
+
+        # Dynamic Inputs
+        self.inputs["AF_METHOD"] = QComboBox()
+        self.inputs["AF_METHOD"].addItems(["Auto (Best Fit)", "cst", "parsec"])
+        self.inputs["AF_THICKNESS"] = LabeledSlider("NACA Thickness (%)", 1.0, 50.0, 12.0, 0.1, 1)
+        self.inputs["AF_RES"] = LabeledSlider("Resolution", 10, 500, 100, 1, 0)
+        self.inputs["AF_SCALE"] = LabeledSlider("Scale Factor", 0.01, 10.0, 1.0, 0.01, 2)
+        self.inputs["AF_TX"] = LabeledSlider("Translation X", -50.0, 50.0, 0.0, 0.01, 2)
+        self.inputs["AF_TY"] = LabeledSlider("Translation Y", -50.0, 50.0, 0.0, 0.01, 2)
+        self.inputs["AF_ROT"] = LabeledSlider("Rotation Angle (°)", -180.0, 180.0, 0.0, 0.1, 1)
+
+        # Connect all changes to the sync function
+        self.inputs["AF_METHOD"].currentIndexChanged.connect(self._sync_airfoil_props)
+        for key in ["AF_THICKNESS", "AF_RES", "AF_SCALE", "AF_TX", "AF_TY", "AF_ROT"]:
+            self.inputs[key].value_changed_by_user.connect(self._sync_airfoil_props)
+
+        self.method_label = QLabel("Fitting Method:")
+        editor_layout.addWidget(self.method_label, 0, 0)
+        editor_layout.addWidget(self.inputs["AF_METHOD"], 0, 1)
+        editor_layout.addWidget(self.inputs["AF_THICKNESS"], 1, 0, 1, 2)
+        editor_layout.addWidget(self.inputs["AF_RES"], 2, 0)
+        editor_layout.addWidget(self.inputs["AF_SCALE"], 2, 1)
+        editor_layout.addWidget(self.inputs["AF_TX"], 3, 0)
+        editor_layout.addWidget(self.inputs["AF_TY"], 3, 1)
+        editor_layout.addWidget(self.inputs["AF_ROT"], 4, 0, 1, 2)
+
+        right_layout.addWidget(self.af_editor_group)
+
+        # Plot
+        plot_group = QGroupBox("Geometry Preview")
         plot_layout = QVBoxLayout(plot_group)
         self.airfoil_fig = Figure(facecolor='#1e1e1e', tight_layout=True)
         self.airfoil_canvas = FigureCanvas(self.airfoil_fig)
         plot_layout.addWidget(self.airfoil_canvas)
-        layout.addWidget(plot_group, 2)
+        right_layout.addWidget(plot_group, 1)
 
-    def _toggle_airfoil_inputs(self, index):
-        self.naca_group.setVisible(index == 0)
-        self.file_group.setVisible(index == 1)
+        self.airfoil_splitter.addWidget(left_pane)
+        self.airfoil_splitter.addWidget(right_pane)
+        self.airfoil_splitter.setStretchFactor(0, 1)
+        self.airfoil_splitter.setStretchFactor(1, 3)
 
-    def _browse_airfoil_file(self):
-        fname, _ = QFileDialog.getOpenFileName(self, "Open Airfoil CSV", "", "CSV Files (*.csv)")
-        if fname:
-            self.inputs["AIRFOIL_FILE"].setText(fname)
+        main_layout.addWidget(self.airfoil_splitter)
+
+        default_name = "NACA_0012"
+        self.airfoil_library[default_name] = {
+            "type": "NACA", "thickness": 12.0,
+            "res": 100, "scale": 1.0, "tx": 0.0, "ty": 0.0, "rot": 0.0
+        }
+        self.airfoil_list.addItem(default_name)
+        self.airfoil_list.setCurrentRow(0)
+
+        self._sync_wing_dropdowns()
+        self._update_editor_visibility()
+
+    def _import_airfoil_files(self):
+        files, _ = QFileDialog.getOpenFileNames(self, "Select Airfoils", "", "Data Files (*.dat *.txt *.csv)")
+        for filepath in files:
+            if os.path.getsize(filepath) == 0: continue
+
+            # Simple validation
+            valid_lines = sum(1 for line in open(filepath, 'r') if len(line.strip().replace(',', ' ').split()) >= 2)
+            if valid_lines < 10: continue
+
+            base_name = os.path.splitext(os.path.basename(filepath))[0]
+            name = base_name
+            count = 1
+            while name in self.airfoil_library:
+                name = f"{base_name}_{count}"
+                count += 1
+
+            self.airfoil_library[name] = {
+                "type": "FILE", "path": filepath, "method": "Auto (Best Fit)",
+                "res": 100, "scale": 1.0, "tx": 0.0, "ty": 0.0, "rot": 0.0
+            }
+            self.airfoil_list.addItem(name)
+
+        self.airfoil_list.setCurrentRow(self.airfoil_list.count() - 1)
+        self._sync_wing_dropdowns()
+
+    def _add_naca_profile(self):
+        # 1. Prompt the user for the NACA 4-digit number
+        text, ok = QInputDialog.getText(self, "Add NACA Airfoil", "Enter NACA 4-digit symmetric series (e.g., 0012, 0015, 0021):")
+
+        if ok and text.strip():
+            naca_str = text.strip()
+
+            # Basic validation: ensure it's a number and has at least 2 digits to extract thickness
+            if not naca_str.isdigit() or len(naca_str) < 2:
+                QMessageBox.warning(self, "Invalid Input", "Please enter a valid NACA number (e.g., 0012).")
+                return
+
+            # 2. Extract thickness from the last two digits (e.g., "0015" -> 15.0)
+            thickness = float(naca_str[-2:])
+
+            # Enforce symmetric limitation based on STRATOS's native NACA capabilities
+            if len(naca_str) == 4 and not naca_str.startswith("00"):
+                self.log.append(f"[WARNING] STRATOS native generator supports symmetric profiles. Defaulting to NACA 00{int(thickness):02d}.")
+                naca_str = f"00{int(thickness):02d}"
+
+            # 3. Handle naming and duplicates
+            name = f"NACA_{naca_str}"
+            count = 1
+            base_name = name
+            while name in self.airfoil_library:
+                name = f"{base_name}_{count}"
+                count += 1
+
+            # 4. Add to the Asset Manager library
+            self.airfoil_library[name] = {
+                "type": "NACA", "thickness": thickness,
+                "res": 100, "scale": 1.0, "tx": 0.0, "ty": 0.0, "rot": 0.0
+            }
+
+            # 5. Add to UI list and trigger the auto-plot
+            self.airfoil_list.addItem(name)
+
+            # Setting the current row automatically triggers _on_airfoil_selected(),
+            # which in turn calls _generate_and_plot_airfoil() to show the plot!
+            self.airfoil_list.setCurrentRow(self.airfoil_list.count() - 1)
+            self._sync_wing_dropdowns()
+
+    def _remove_airfoil(self):
+        item = self.airfoil_list.currentItem()
+        if item and len(self.airfoil_library) > 1: # Prevent deleting the last airfoil
+            name = item.text()
+            del self.airfoil_library[name]
+            self.airfoil_list.takeItem(self.airfoil_list.row(item))
+            self._sync_wing_dropdowns()
+        elif len(self.airfoil_library) <= 1:
+            QMessageBox.warning(self, "Warning", "You must have at least one airfoil in the library.")
+
+    def _on_airfoil_selected(self, current, previous):
+        self._update_editor_visibility()
+        if not current: return
+        name = current.text()
+        data = self.airfoil_library[name]
+
+        # Block signals to update sliders without triggering recursion
+        self._block_af_signals(True)
+        if data["type"] == "FILE":
+            self.inputs["AF_METHOD"].setCurrentText(data["method"])
+        else:
+            self.inputs["AF_THICKNESS"].set_value(data["thickness"])
+
+        self.inputs["AF_RES"].set_value(data["res"])
+        self.inputs["AF_SCALE"].set_value(data["scale"])
+        self.inputs["AF_TX"].set_value(data["tx"])
+        self.inputs["AF_TY"].set_value(data["ty"])
+        self.inputs["AF_ROT"].set_value(data["rot"])
+        self._block_af_signals(False)
+        self._generate_and_plot_airfoil()
+
+    def _block_af_signals(self, block):
+        for key in ["AF_METHOD", "AF_THICKNESS", "AF_RES", "AF_SCALE", "AF_TX", "AF_TY", "AF_ROT"]:
+            self.inputs[key].blockSignals(block)
+
+    def _update_editor_visibility(self):
+        item = self.airfoil_list.currentItem()
+        if not item:
+            self.af_editor_group.setEnabled(False)
+            return
+        self.af_editor_group.setEnabled(True)
+        is_file = self.airfoil_library[item.text()]["type"] == "FILE"
+        self.inputs["AF_METHOD"].setVisible(is_file)
+        self.method_label.setVisible(is_file)
+        self.inputs["AF_THICKNESS"].setVisible(not is_file)
+
+    def _sync_airfoil_props(self, *args):
+        item = self.airfoil_list.currentItem()
+        if not item: return
+        data = self.airfoil_library[item.text()]
+
+        if data["type"] == "FILE":
+            data["method"] = self.inputs["AF_METHOD"].currentText()
+        else:
+            data["thickness"] = self.inputs["AF_THICKNESS"].get_value()
+
+        data["res"] = int(self.inputs["AF_RES"].get_value())
+        data["scale"] = self.inputs["AF_SCALE"].get_value()
+        data["tx"] = self.inputs["AF_TX"].get_value()
+        data["ty"] = self.inputs["AF_TY"].get_value()
+        data["rot"] = self.inputs["AF_ROT"].get_value()
+
+        self._generate_and_plot_airfoil()
 
     def _generate_and_plot_airfoil(self):
+        item = self.airfoil_list.currentItem()
+        if not item: return
+        data = self.airfoil_library[item.text()]
+
         try:
-            res = int(self.inputs["AIRFOIL_RES"].get_value())
-            scale = float(self.inputs["AIRFOIL_SCALE"].get_value())
-            rot = float(self.inputs["AIRFOIL_ROT"].get_value())
-            trans = (float(self.inputs["AIRFOIL_TX"].get_value()), float(self.inputs["AIRFOIL_TY"].get_value()))
+            res, scale = data["res"], data["scale"]
+            trans, rot = (data["tx"], data["ty"]), data["rot"]
 
-            if self.inputs["AIRFOIL_MODE"].currentIndex() == 0:
-                thick = float(self.inputs["AIRFOIL_THICKNESS"].get_value())
-                x, y = get_airfoil_points(thickness=thick, resolution=res, scale_factor=scale, translation=trans, rotation_angle=rot)
+            if data["type"] == "FILE":
+                meth = None if "Auto" in data["method"] else data["method"]
+                x, y = get_airfoil_points(filename=data["path"], method=meth, resolution=res, scale_factor=scale, translation=trans, rotation_angle=rot)
             else:
-                fpath = self.inputs["AIRFOIL_FILE"].text()
-                if not fpath:
-                    QMessageBox.warning(self, "Missing File", "Please select a CSV file first.")
-                    return
-                meth = self.inputs["AIRFOIL_METHOD"].currentText()
-                x, y = get_airfoil_points(filename=fpath, method=meth, resolution=res, scale_factor=scale, translation=trans, rotation_angle=rot)
+                x, y = get_airfoil_points(thickness=data["thickness"], resolution=res, scale_factor=scale, translation=trans, rotation_angle=rot)
 
+            # Plot
             self.airfoil_fig.clear()
             ax = self.airfoil_fig.add_subplot(111)
             ax.plot(x, y, color='#00BFFF', linewidth=2, marker='o', markersize=3)
             ax.set_aspect('equal', adjustable='box')
             ax.grid(True, alpha=0.2, linestyle='--')
             ax.set_facecolor('#1e1e1e')
-            for spine in ax.spines.values():
-                spine.set_color('#3c3c3c')
+            for spine in ax.spines.values(): spine.set_color('#3c3c3c')
             ax.tick_params(colors='white')
-
             self.airfoil_fig.tight_layout()
             self.airfoil_canvas.draw()
-
-            self.log.append("[SUCCESS] Airfoil preview generated.")
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"Airfoil Generation failed: {e}")
-            self.log.append(f"[ERROR] Airfoil error: {e}")
+            self.log.append(f"[ERROR] Plot failed: {e}")
 
     def _update_series_visibility(self):
         """Toggles visibility of inputs based on selected Envelope Series (Gertler/NACA)."""
@@ -759,8 +944,8 @@ class AirshipGUI(QMainWindow):
         if is_multi:
             self.tab_widget.addTab(self.fairings_tab, "Multi-Lobe Configuration")
         if is_winged:
-            self.tab_widget.addTab(self.wing_tab, "Wing Design")
             self.tab_widget.addTab(self.airfoil_tab, "Airfoil Design")
+            self.tab_widget.addTab(self.wing_tab, "Wing Design")
         if not is_balloon:
             self.tab_widget.addTab(self.fin_tab, "Fin Design")
 
@@ -1049,9 +1234,10 @@ class AirshipGUI(QMainWindow):
 
                 # --- NEW: Wing Parameters ---
                 has_wings=p.get("INCLUDE_WINGS", False),
-                wing_span=p.get("WING_SPAN", 0),
-                wing_root_chord=p.get("WING_ROOT_CHORD", 0),
-                wing_tip_chord=p.get("WING_TIP_CHORD", 0),
+                # Dynamically extract span and chords from the first and last stations in the table
+                wing_span=(p.get("WING_STATIONS", [{}])[-1].get('y', 0) * 2) if p.get("WING_STATIONS") else 0,
+                wing_root_chord=p.get("WING_STATIONS", [{}])[0].get('chord', 0),
+                wing_tip_chord=p.get("WING_STATIONS", [{}])[-1].get('chord', 0),
                 wing_thickness=p.get("WING_THICKNESS", 0),
                 wing_density=p.get("FIN_DENSITY", 10.0), # Reuses fin density for structural consistency
                 # ----------------------------
@@ -1085,6 +1271,31 @@ class AirshipGUI(QMainWindow):
             ballonet_fabric_mass = ahull.ballonet_fabric_mass * (vol ** (2/3))
             tether_mass_op = (ahull.tether_density * p["OPERATIONAL_HEIGHT"]) if p["INCLUDE_TETHER"] else 0
             gas_mass_op = get_gas_mass(P_op, T_op, vol, *ahull.gas_properties)
+
+            # --- NEW: PIECEWISE WING STRUCTURAL MASS OVERRIDE ---
+            if p.get("INCLUDE_WINGS", False) and p.get("WING_STATIONS"):
+                stations = p["WING_STATIONS"]
+                t_frac = p.get("WING_THICKNESS", 12.0) / 100.0
+                density = p.get("FIN_DENSITY", 10.0)
+
+                # A standard airfoil cross-sectional area is approx 0.685 * thickness * chord^2
+                k_area = 0.685
+                single_wing_vol = 0.0
+
+                for i in range(len(stations) - 1):
+                    dy = abs(stations[i+1]['y'] - stations[i]['y'])
+                    c1 = stations[i]['chord']
+                    c2 = stations[i+1]['chord']
+
+                    # Exact geometric integration of the chord squared over the span segment (Frustum volume)
+                    segment_vol = k_area * t_frac * (dy / 3.0) * (c1**2 + c1*c2 + c2**2)
+                    single_wing_vol += segment_vol
+
+                ahull.wing_mass = 2 * single_wing_vol * density # Account for both Left and Right wings
+            # ----------------------------------------------------
+
+            # --- UPDATED Total Mass Calculation ---
+            total_mass_op = env_mass + ballonet_fabric_mass + tether_mass_op + ahull.fin_mass + ahull.wing_mass + ahull.additional_mass + gas_mass_op
 
             # --- UPDATED Total Mass Calculation ---
             total_mass_op = env_mass + ballonet_fabric_mass + tether_mass_op + ahull.fin_mass + ahull.wing_mass + ahull.additional_mass + gas_mass_op
@@ -1292,26 +1503,62 @@ class AirshipGUI(QMainWindow):
         else:
             p["INCLUDE_WINGS"] = False
 
-        if p["INCLUDE_WINGS"] and hasattr(self, 'inputs') and "AIRFOIL_RES" in self.inputs:
+        # --- CAPTURE WING TOGGLE & STATIONS ---
+        p["INCLUDE_WINGS"] = self.inputs.get("INCLUDE_WINGS") and self.inputs["INCLUDE_WINGS"].isChecked()
+
+        if p["INCLUDE_WINGS"] and hasattr(self, 'wing_table'):
             try:
-                res = int(self.inputs["AIRFOIL_RES"].get_value())
-                scale = float(self.inputs["AIRFOIL_SCALE"].get_value())
-                rot = float(self.inputs["AIRFOIL_ROT"].get_value())
-                trans = (float(self.inputs["AIRFOIL_TX"].get_value()), float(self.inputs["AIRFOIL_TY"].get_value()))
+                stations = []
+                airfoils_x = []
+                airfoils_y = []
 
-                if self.inputs["AIRFOIL_MODE"].currentIndex() == 0:
-                    thick = float(self.inputs["AIRFOIL_THICKNESS"].get_value())
-                    x, y = get_airfoil_points(thickness=thick, resolution=res, scale_factor=scale, translation=trans, rotation_angle=rot)
-                else:
-                    fpath = self.inputs["AIRFOIL_FILE"].text()
-                    meth = self.inputs["AIRFOIL_METHOD"].currentText()
-                    x, y = get_airfoil_points(filename=fpath, method=meth, resolution=res, scale_factor=scale, translation=trans, rotation_angle=rot)
+                # --- NEW: FORCE UNIFORM WING RESOLUTION ---
+                # Read the resolution from the Root airfoil, fallback to 100
+                global_wing_res = 100
+                if hasattr(self, 'airfoil_library'):
+                    root_combo = self.wing_table.cellWidget(0, 5)
+                    root_name = root_combo.currentText() if root_combo else None
+                    if root_name and root_name in self.airfoil_library:
+                        global_wing_res = self.airfoil_library[root_name]["res"]
 
-                p["AIRFOIL_X"] = x.tolist() if hasattr(x, 'tolist') else list(x)
-                p["AIRFOIL_Y"] = y.tolist() if hasattr(y, 'tolist') else list(y)
+                for row in range(self.wing_table.rowCount()):
+                    y_val = float(self.wing_table.item(row, 0).text())
+                    chord = float(self.wing_table.item(row, 1).text())
+                    twist = float(self.wing_table.item(row, 2).text())
+                    x_off = float(self.wing_table.item(row, 3).text())
+                    z_off = float(self.wing_table.item(row, 4).text())
+
+                    combo = self.wing_table.cellWidget(row, 5)
+                    af_name = combo.currentText() if combo else None
+
+                    stations.append({'y': y_val, 'chord': chord, 'twist': twist, 'x_off': x_off, 'z_off': z_off})
+
+                    # Read the exact pre-configured properties from the Asset Manager
+                    if af_name and hasattr(self, 'airfoil_library') and af_name in self.airfoil_library:
+                        af_data = self.airfoil_library[af_name]
+
+                        # --- NEW: Override individual res with global_wing_res ---
+                        res, scale = global_wing_res, af_data["scale"]
+                        trans, rot = (af_data["tx"], af_data["ty"]), af_data["rot"]
+
+                        if af_data["type"] == "FILE":
+                            meth = None if "Auto" in af_data["method"] else af_data["method"]
+                            x_pts, y_pts = get_airfoil_points(filename=af_data["path"], method=meth, resolution=res, scale_factor=scale, translation=trans, rotation_angle=rot)
+                        else:
+                            x_pts, y_pts = get_airfoil_points(thickness=af_data["thickness"], resolution=res, scale_factor=scale, translation=trans, rotation_angle=rot)
+                    else:
+                        # Absolute fallback
+                        x_pts, y_pts = get_airfoil_points(thickness=12.0, resolution=100, scale_factor=1.0)
+
+                    airfoils_x.append(x_pts.tolist() if hasattr(x_pts, 'tolist') else list(x_pts))
+                    airfoils_y.append(y_pts.tolist() if hasattr(y_pts, 'tolist') else list(y_pts))
+                # Package the compiled arrays directly into the parameter dictionary
+                p["WING_STATIONS"] = stations
+                p["WING_AIRFOILS_X"] = airfoils_x
+                p["WING_AIRFOILS_Y"] = airfoils_y
 
             except Exception as e:
-                self.log.append(f"[ERROR] Failed to package airfoil for Salome: {e}")
+                self.log.append(f"[ERROR] Failed to compile wing stations: {e}")
                 return None
 
         # Capture Profile Series
@@ -1566,20 +1813,13 @@ class AirshipGUI(QMainWindow):
                 self.inputs["INCLUDE_FINS"].setChecked(True)
 
             elif hasattr(self, 'wing_tab') and current_tab == self.wing_tab:
-                wing_defaults = {
-                    "WING_SPAN": 20.0,
-                    "WING_ROOT_CHORD": 5.0,
-                    "WING_TIP_CHORD": 2.0,
-                    "WING_SWEEP": 15.0,
-                    "WING_DIHEDRAL": 5.0,
-                    "WING_TWIST_ROOT": 2.0,
-                    "WING_TWIST_TIP": -2.0,
-                    "WING_THICKNESS": 12.0,
-                    "WING_AXIAL_OFFSET": 40.0
-                }
-                for key, val in wing_defaults.items():
-                    if key in self.inputs:
-                        self.inputs[key].set_value(val)
+                if "WING_THICKNESS" in self.inputs: self.inputs["WING_THICKNESS"].set_value(12.0)
+                if "WING_AXIAL_OFFSET" in self.inputs: self.inputs["WING_AXIAL_OFFSET"].set_value(40.0)
+
+                # Clear the dynamic table and reset to standard root and tip
+                self.wing_table.setRowCount(0)
+                self._add_wing_station(0.0, 5.0, 2.0, 0.0, 0.0)
+                self._add_wing_station(10.0, 2.0, -2.0, 2.58, 0.87)
 
             elif current_tab == self.output_tab:
                 self.inputs["FINAL_OBJECT_NAME"].setText("Airship_Project")
