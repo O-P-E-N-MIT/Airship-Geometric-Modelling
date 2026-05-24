@@ -84,7 +84,7 @@ class GenerationWorker(QObject):
 
             else: # AIRSHIP MODES
                 print(f"[PROCESS] Initializing Airship Geometry Engine...")
-                g = AirshipGeometry(self.params, self.params['SALOME_PATH'])
+                g = AirshipGeometry(self.params, self.params['SALOME_PATH'], self.params['ENVELOPE_SERIES'])
 
                 # LOGIC BYPASS:
                 # If compute_added_mass is False, we pass the format (e.g., "STL") to skip BEM
@@ -1158,10 +1158,12 @@ class AirshipGUI(QMainWindow):
             return
 
         params = self.get_parameters(self.current_session_folder)
+
         if params:
             try:
                 from geometry import AirshipGeometry
-                geom = AirshipGeometry(params, self.salome_path)
+
+                geom = AirshipGeometry(params, self.salome_path, params['ENVELOPE_SERIES'])
                 # Unpacking the five values: vol, surf, top, side, cv
                 vol, surf, top, side, cv = geom.geometric_properties()
 
@@ -1173,7 +1175,7 @@ class AirshipGUI(QMainWindow):
                 # UPDATED: Format the CV coordinate pair
                 self.prop_outputs["cv"].setText(f"{cv[0]:.2f}, {cv[1]:.2f}")
             except Exception as e:
-                # print(e)
+                print(e)
                 pass
 
     def _update_3d_view(self, stl_path):

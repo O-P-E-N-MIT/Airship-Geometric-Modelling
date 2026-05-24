@@ -3,7 +3,7 @@ import subprocess
 import math
 import numpy as np
 
-from geometry_handler import GertlerEnvelope
+from geometry_handler import GertlerEnvelope, NACAEnvelope, DragonDreamEnvelope
 from meshlab_handler import apply_filters, get_meshdata
 from added_mass import compute_added_mass
 from airfoil import get_airfoil_points
@@ -22,9 +22,15 @@ BREAKER = "# INPUT PARAMETERS END"
 with open(os.path.join(DIR_PATH, BASE_SCRIPT_FILE), 'r') as f:
     BASE_SCRIPT = f.read().split(BREAKER, 1)[1]
 
+ENVELOPE_SERIES = {
+    "GERTLER": GertlerEnvelope,
+    "NACA": NACAEnvelope,
+    "DRAGON_DREAM": DragonDreamEnvelope
+}
+
 class AirshipGeometry:
 
-    def __init__(self, params, salome_path):
+    def __init__(self, params, salome_path, series):
         self.params = params
         self.salome_path = salome_path
         self.output_directory = os.path.normpath(params["OUTPUT_DIRECTORY"])
@@ -32,6 +38,7 @@ class AirshipGeometry:
         self.l2d = params["l2d"]
         self.D_MAX = self.L / self.l2d
         self.R_MAX = self.D_MAX / 2.0
+        self.series = ENVELOPE_SERIES[series]
 
         if not os.path.exists(self.output_directory):
             os.makedirs(self.output_directory)
@@ -155,8 +162,7 @@ class AirshipGeometry:
             raise RuntimeError(f"Salome execution failed: {e}")
 
     def geometric_properties(self):
-        """Calculates theoretical geometric values including hull, fins, and wings."""
-        envelope = GertlerEnvelope.from_parameters(
+        envelope = self.series.from_parameters(
             self.params["ENVELOPE_PARAMS"],
             self.params["ENVELOPE_LENGTH"],
             self.params["ENVELOPE_RESOLUTION"]

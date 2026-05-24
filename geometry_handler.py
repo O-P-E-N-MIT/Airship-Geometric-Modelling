@@ -12,8 +12,11 @@
 
 import numpy as np
 
+from scipy.integrate import dblquad, simpson, quad
+
 try:
-    from shapely import Point
+    from shapely.geometry import Point, box
+    from shapely.affinity import scale
     from shapely.ops import unary_union
 except ImportError:
     print("Shapely not found. Trilobe volume calculations will be mocked.")
@@ -39,6 +42,9 @@ STANDARD_ENVELOPES = {
 
 # A way to store the coefficients in the memory instead of computing it for the same parameters every time.
 GERTLER_COEFFICIENTS = {}
+
+# Resolution for shapely approximation.
+RES = 128
 
 # A general Envelope object to extend it to multiple shapes.
 class Envelope:
@@ -288,14 +294,33 @@ class Envelope:
         return envelope
 
 class DragonDreamEnvelope(Envelope):
+
     def __init__(self, length, width, height, bottom_flatness, n=100):
         self.length = length
         self.width = width
         self.height = height
         self.bottom_flatness = bottom_flatness # 0 to 1 (1 = fully flat at axis)
-        # We define "diameter" as the max vertical dimension for hoop stress estimations in aerostat.py
-        diameter = height
-        super().__init__(length, diameter, n)
+        
+        # For aerostat calculations, the maximum vertical dimension (height) is taken as 
+        super().__init__(length, height, n)
+
+    # Returns a DragonDreamEnvelope from the parameters.
+    #
+    # params = (W, H, f)
+    # length = Length of the envelope
+    # n = Number of points to be generated along the length
+    def from_parameters (params, length, n=100):
+        return DragonDreamEnvelope(length, params[0], params[1], params[2], n)
+    
+    def copy (self):
+        return type(self)(self.length, self.width, self.height, self.bottom_flatness, self.n)
+    
+    # Set the length of the envelope
+    def set_length (self, l):
+        self.width = l * self.width / self.length
+        self.height = l * self.height / self.length
+        self.diameter = self.height
+        self.length = l
 
     def at(self, x):
         # Returns the Z-height of the top ellipsoid at a given X for fin/wing placement.
@@ -308,28 +333,291 @@ class DragonDreamEnvelope(Envelope):
         if abs(x_local) > a:
             return 0.0
         return c * np.sqrt(1 - (x_local / a)**2)
+    
+    # This is only used to guess initial length in case of an volumetric input.
+    @property
+    def cp(self):
+        return 0.5 * self.width / self.height * (2/3 - (self.bottom_flatness - 1) + (self.bottom_flatness - 1)**3 / 3)
 
     def volume(self):
-        # Volume of standard tri-axial ellipsoid: 4/3 * pi * a * b * c
-        a = self.length / 2.0
-        b = self.width / 2.0
-        c = self.height / 2.0
-        full_vol = (4.0 / 3.0) * np.pi * a * b * c
-
-        # Approximate reduction for the flat bottom
-        reduction_factor = 1.0 - (0.5 * self.bottom_flatness)
-        return full_vol * reduction_factor
+        print(self.length * self.height * self.width)
+        return np.pi/8 * (self.length * self.width * self.height) * (2/3 - (self.bottom_flatness - 1) + (self.bottom_flatness - 1)**3 / 3)
 
     def surface_area(self):
-        # Knud Thomsen's formula for ellipsoid surface area approximation
-        a, b, c = self.length / 2.0, self.width / 2.0, self.height / 2.0
-        p = 1.6075
-        area = 4 * np.pi * (((a*b)**p + (a*c)**p + (b*c)**p) / 3.0)**(1/p)
-        return area * (1.0 - (0.2 * self.bottom_flatness)) # Rough reduction for flattened bottom
+        a = self.length / 2
+        b = self.width / 2
+        c = self.height / 2
+        f = self.bottom_flatness
+
+        S_flat = (np.pi * self.length * self.width / 4) * f * (2 - f)
+
+        u_upper = np.arccos(f - 1)
+
+        S_curved, _ = dblquad(
+            lambda u, v: 
+                np.sin(u) * np.sqrt(
+                    (b * c * np.sin(u) * np.cos(v))**2
+                    + (a * c * np.sin(u) * np.sin(v))**2
+                    + (a * b * np.cos(u))**2
+                ),
+
+            0, 2*np.pi, lambda _: 0, lambda _: u_upper)
+
+        return S_flat + S_curved
+    
+    def cv(self):
+        k = self.bottom_flatness - 1
+        return 0, (self.height / 8) * (1 - k**2)**2 / (2/3 - k + k**3 / 3)
 
     def side_projected_area(self):
-        return np.pi * (self.length / 2.0) * (self.height / 2.0)
+        k = self.bottom_flatness - 1
+        return 0.25 * (self.length * self.height) * (np.pi/2 - np.arcsin(k) - k * np.sqrt(1 - k**2))
+    
+    def volume_bilobe(self, f):
+        if f > self.width:
+            return 2 * self.volume()
+        
+        a = self.length / 2
+        b = self.width / 2
+        c = self.height / 2
+        bf = self.bottom_flatness
+        z_min = -c * (1 - bf)
+    
+        def z_lower(y):
+            return max(z_min, -c * np.sqrt(1 - (y / b)**2))
+    
+        def z_upper(y):
+            return c * np.sqrt(1 - (y / b)**2)
+    
+        def x_val(z, y):
+            val = 1 - (y / b)**2 - (z / c)**2
+            return a * np.sqrt(val) if val > 0 else 0.0
+    
+        return 2 * self.volume() - 4 * dblquad(x_val, f/2, b, z_lower, z_upper)[0]
+    
+    def surface_area_bilobe(self, f):
+        if f > self.width:
+            return 2 * self.surface_area()
+        
+        a = self.length / 2
+        b = self.width / 2
+        c = self.height / 2
+        bf = self.bottom_flatness
 
+        def surface_integrand(u, v):
+            return np.sin(u) * np.sqrt(
+                (b * c * np.sin(u) * np.cos(v))**2
+                + (a * c * np.sin(u) * np.sin(v))**2
+                + (a * b * np.cos(u))**2
+            )
+    
+        def v_lower_hidden(u):
+            ratio = f / (2 * b * np.sin(u)) if np.sin(u) != 0 else 1.0
+            return np.arcsin(ratio) if ratio < 1.0 else 0.0
+    
+        def v_upper_hidden(u):
+            ratio = f / (2 * b * np.sin(u)) if np.sin(u) != 0 else 1.0
+            return np.pi - np.arcsin(ratio) if ratio < 1.0 else 0.0
+        
+        u_min_overlap = np.arcsin(f / (2 * b))
+        u_max_overlap = np.arccos(bf - 1)
+    
+        S_hidden_curved = dblquad(
+            lambda v, u: surface_integrand(u, v), 
+            u_min_overlap, u_max_overlap,
+            v_lower_hidden, v_upper_hidden
+        )[0] if u_min_overlap < u_max_overlap else 0
+    
+        r_flat = np.sqrt(bf * (2 - bf))
+        a_flat = a * r_flat
+        b_flat = b * r_flat
+    
+        S_hidden_flat = quad(
+            lambda y: 2 * a_flat * np.sqrt(max(1 - (y / b_flat)**2, 0)), 
+            f/2, b_flat
+        )[0] if f / 2 < b_flat else 0
+    
+        return 2 * self.surface_area() - 2 * (S_hidden_curved + S_hidden_flat)
+    
+    def top_projected_area_bilobe(self, f):
+        if f > self.width:
+            return np.pi/2 * self.length * self.width
+        
+        a = self.length / 2
+        b = self.width / 2
+        term_top = f / (2 * b)
+
+        return 2 * (np.pi * a * b) - 2 * a * b * (np.pi/2 - np.arcsin(term_top) - term_top * np.sqrt(1 - term_top**2))
+    
+    def cv_bilobe(self, f):
+        if f > self.width:
+            return self.cv()
+        
+        a = self.length / 2
+        b = self.width / 2
+        c = self.height / 2
+        bf = self.bottom_flatness
+        z_min = -c * (1 - bf)
+    
+        M_z_single = (np.pi * a * b * c**2 / 4) * (1 - (1 - bf)**2)**2
+    
+        def z_lower(y):
+            return max(z_min, -c * np.sqrt(1 - (y / b)**2))
+    
+        def z_upper(y):
+            return c * np.sqrt(1 - (y / b)**2)
+    
+        def x_val(z, y):
+            val = 1 - (y / b)**2 - (z / c)**2
+            return a * np.sqrt(val) if val > 0 else 0.0
+    
+        M_z_overlap_quarter, _ = dblquad(lambda z, y: z * x_val(z, y), f / 2, b, z_lower, z_upper)
+
+        return 0, (2 * M_z_single - 4 * M_z_overlap_quarter) / self.volume_bilobe(f)
+    
+    def top_projected_area_trilobe(self, e, f, g, central_lobe=None):
+        a = self.length / 2
+        b = self.width / 2
+            
+        return unary_union([
+            scale(Point(0, 0).buffer(1, resolution=RES), xfact=a, yfact=b),
+            scale(Point(e, f).buffer(1, resolution=RES), xfact=a, yfact=b),
+            scale(Point(e, -f).buffer(1, resolution=RES), xfact=a, yfact=b)
+        ]).area
+    
+    def side_projected_area_trilobe(self, e, f, g, central_lobe=None):
+        a = self.length / 2
+        c = self.height / 2
+        z_cut = -c * (1 - self.bottom_flatness)
+
+        return unary_union([
+            scale(Point(0, g).buffer(1, resolution=RES), xfact=a, yfact=c)
+                .intersection(box(0 - 2*a, g + z_cut, 0 + 2*a, g + 2*c)),
+            scale(Point(e, 0).buffer(1, resolution=RES), xfact=a, yfact=c)
+                .intersection(box(e - 2*a, 0 + z_cut, e + 2*a, 0 + 2*c))
+        ]).area
+    
+    def volume_trilobe(self, e, f, g, central_lobe=None):
+        a = self.length / 2
+        b = self.width / 2
+        c = self.height / 2
+        f_flat = self.bottom_flatness
+    
+        z_cut_local = -c * (1 - f_flat)
+        centers = [(0.0, 0.0, g), (e, f, 0.0), (e, -f, 0.0)]
+    
+        z_mins = [cz + z_cut_local for _, _, cz in centers]
+        z_maxs = [cz + c for _, _, cz in centers]
+        global_z_min = min(z_mins)
+        global_z_max = max(z_maxs)
+    
+        z_array = np.linspace(global_z_min, global_z_max, 1000)
+        areas = []
+    
+        for z in z_array:
+            slice_ellipses = []
+            for cx, cy, cz in centers:
+                if cz + z_cut_local <= z <= cz + c:
+                    dz = z - cz
+                    val = 1 - (dz / c) ** 2
+                    if val > 0:
+                        local_a = a * np.sqrt(val)
+                        local_b = b * np.sqrt(val)
+                        ellipse = scale(Point(cx, cy).buffer(1.0, resolution=RES), xfact=local_a, yfact=local_b)
+                        slice_ellipses.append(ellipse)
+            areas.append(unary_union(slice_ellipses).area if slice_ellipses else 0.0)
+    
+        return simpson(y=np.array(areas), x=z_array)
+    
+    def surface_area_trilobe(self, e, f, g, central_lobe=None):
+        a = self.length / 2
+        b = self.width / 2
+        c = self.height / 2
+        f_flat = self.bottom_flatness
+    
+        z_cut_local = -c * (1 - f_flat)
+        centers = [(0.0, 0.0, g), (e, f, 0.0), (e, -f, 0.0)]
+    
+        z_mins = [cz + z_cut_local for _, _, cz in centers]
+        z_maxs = [cz + c for _, _, cz in centers]
+        global_z_min = min(z_mins)
+        global_z_max = max(z_maxs)
+    
+        z_array = np.linspace(global_z_min, global_z_max, 1000)
+        perimeters = []
+    
+        for z in z_array:
+            slice_ellipses = []
+            for cx, cy, cz in centers:
+                if cz + z_cut_local <= z <= cz + c:
+                    dz = z - cz
+                    val = 1 - (dz / c) ** 2
+                    if val > 0:
+                        local_a = a * np.sqrt(val)
+                        local_b = b * np.sqrt(val)
+                        ellipse = scale(Point(cx, cy).buffer(1.0, resolution=RES), xfact=local_a, yfact=local_b)
+                        slice_ellipses.append(ellipse)
+            perimeters.append(unary_union(slice_ellipses).length if slice_ellipses else 0.0)
+    
+        S_curved = simpson(y=np.array(perimeters), x=z_array)
+    
+        bottom_ellipses = []
+        for cx, cy, cz in centers:
+            if np.isclose(cz + z_cut_local, global_z_min, atol=1e-5):
+                r = np.sqrt(f_flat * (2 - f_flat))
+                ellipse = scale(Point(cx, cy).buffer(1.0, resolution=RES), xfact=a * r, yfact=b * r)
+                bottom_ellipses.append(ellipse)
+    
+        S_flat = unary_union(bottom_ellipses).area if bottom_ellipses else 0.0
+    
+        return S_curved + S_flat
+    
+    def cv_trilobe(self, e, f, g, central_lobe=None):
+        a = self.length / 2
+        b = self.width / 2
+        c = self.height / 2
+        f_flat = self.bottom_flatness
+    
+        z_cut_local = -c * (1 - f_flat)
+        centers = [(0.0, 0.0, g), (e, f, 0.0), (e, -f, 0.0)]
+    
+        z_mins = [cz + z_cut_local for _, _, cz in centers]
+        z_maxs = [cz + c for _, _, cz in centers]
+        global_z_min = min(z_mins)
+        global_z_max = max(z_maxs)
+    
+        z_array = np.linspace(global_z_min, global_z_max, 1000)
+        areas = []
+        x_centroids = []
+    
+        for z in z_array:
+            slice_ellipses = []
+            for cx, cy, cz in centers:
+                if cz + z_cut_local <= z <= cz + c:
+                    dz = z - cz
+                    val = 1 - (dz / c) ** 2
+                    if val > 0:
+                        local_a = a * np.sqrt(val)
+                        local_b = b * np.sqrt(val)
+                        ellipse = scale(Point(cx, cy).buffer(1.0, resolution=RES), xfact=local_a, yfact=local_b)
+                        slice_ellipses.append(ellipse)
+            if slice_ellipses:
+                union_poly = unary_union(slice_ellipses)
+                areas.append(union_poly.area)
+                x_centroids.append(union_poly.centroid.x)
+            else:
+                areas.append(0.0)
+                x_centroids.append(0.0)
+    
+        areas = np.array(areas)
+        x_centroids = np.array(x_centroids)
+    
+        V = simpson(y=areas, x=z_array)
+        X_c = simpson(y=x_centroids * areas, x=z_array) / V if V > 0 else 0.0
+        Z_c = simpson(y=z_array * areas, x=z_array) / V if V > 0 else 0.0
+    
+        return X_c, Z_c
+    
 class GertlerEnvelope(Envelope):
 
     # Input variables for Gertler Envelope
@@ -425,6 +713,9 @@ class GertlerEnvelope(Envelope):
         diameter = length / params[4]
         return GertlerEnvelope(coeffs, length, diameter, n)
     
+    def copy (self):
+        return type(self)(self.coeffs, self.length, self.diameter, self.n)
+    
 class NACAEnvelope(Envelope):
 
     # Prismatic coefficient of a NACA envelope is constant irrespective of the parameters.
@@ -461,6 +752,9 @@ class NACAEnvelope(Envelope):
     def from_parameters (params, length, n=100):
         diameter = length / params[0]
         return NACAEnvelope(length, diameter, n)
+    
+    def copy (self):
+        return type(self)(self.length, self.diameter, self.n)
 
 # Gets a common trilobe axis for both extreme and central lobe.
 def get_trilobe_axis (extreme_lobe, central_lobe, e):
