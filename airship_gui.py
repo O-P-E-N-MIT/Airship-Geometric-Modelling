@@ -313,10 +313,58 @@ class AirshipGUI(QMainWindow):
             }
             QCheckBox#FinToggle::indicator { width: 25px; height: 25px; }
             QCheckBox#FinToggle:hover { background-color: #3D3D3D; }
+
+            QScrollBar:vertical {
+                border: none;
+                background: #1e1e1e;
+                width: 10px;
+                margin: 0px;
+            }
+            QScrollBar::handle:vertical {
+                background: #4A4A4A;
+                border-radius: 5px;
+                min-height: 30px;
+            }
+            QScrollBar::handle:vertical:hover {
+                background: #00BFFF;
+            }
+            
+            QScrollBar:horizontal {
+                border: none;
+                background: #1e1e1e;
+                height: 10px;
+                margin: 0px;
+            }
+            QScrollBar::handle:horizontal {
+                background: #4A4A4A;
+                border-radius: 5px;
+                min-width: 30px;
+            }
+            QScrollBar::handle:horizontal:hover {
+                background: #00BFFF;
+            }
+            
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical,
+            QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
+                width: 0px;
+                height: 0px;
+            }
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical,
+            QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {
+                background: none;
+            }
         """)
 
     def setup_primary_tab_layout(self):
-        layout = QVBoxLayout(self.primary_input_tab)
+        tab_layout = QVBoxLayout(self.primary_input_tab)
+        tab_layout.setContentsMargins(0, 0, 0, 0)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet("QScrollArea { border: none; }")
+
+        container_widget = QWidget()
+        layout = QVBoxLayout(container_widget)
         layout.addWidget(self.header_widget)
 
         self.hull_shape_box = QGroupBox("Hull Envelope Shape")
@@ -432,6 +480,8 @@ class AirshipGUI(QMainWindow):
         layout.addWidget(self.appendages_box)
 
         layout.addStretch()
+        scroll.setWidget(container_widget)
+        tab_layout.addWidget(scroll)
 
     def setup_wing_tab(self):
         main_layout = QVBoxLayout(self.wing_tab)
