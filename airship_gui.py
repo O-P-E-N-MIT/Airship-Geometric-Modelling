@@ -1451,9 +1451,43 @@ class AirshipGUI(QMainWindow):
         try:
             self.plotter.clear()
             mesh = pv.read(stl_path)
-            self.plotter.add_mesh(mesh, color="#00BFFF", show_edges=True, edge_color="#333333", opacity=1)
+
+            # 1. Clean the mesh and force outward-facing normals
+            mesh = mesh.clean()
+            mesh.compute_normals(
+                cell_normals=False,
+                point_normals=True,
+                inplace=True,
+                auto_orient_normals=True
+            )
+
+            # 2. Force a classic CAD 3-point lighting setup
+            self.plotter.enable_lightkit()
+
+            # 3. Render the solid body with fixed lighting parameters
+            self.plotter.add_mesh(
+                mesh,
+                color="#00BFFF",
+                show_edges=False,
+                smooth_shading=True,
+                specular=0.5,          # Gives the plastic CAD shine
+                diffuse=0.7,           # Base color reflection
+                ambient=0.1,           # CRITICAL: Kept low so shadows actually appear
+                lighting=True
+            )
+
+            # 4. Overlay the sharp feature edges (fins, boundaries)
+            edges = mesh.extract_feature_edges(
+                boundary_edges=True,
+                feature_edges=True,
+                feature_angle=30,
+                manifold_edges=False
+            )
+            self.plotter.add_mesh(edges, color="#1e1e1e", line_width=2)
+
             self.plotter.view_isometric()
             self.plotter.reset_camera()
+
         except Exception as e:
             print(f"[ERROR] 3D View failed: {e}")
 
