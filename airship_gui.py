@@ -819,7 +819,8 @@ class AirshipGUI(QMainWindow):
         is_naca = series == "NACA"
         is_dragon = series == "DRAGON_DREAM"
 
-        gertler_widgets = ["m1", "r0", "r1", "cp", "l2d"]
+        # Removed 'l2d' from this list since NACA also needs it
+        gertler_widgets = ["m1", "r0", "r1", "cp"]
         dragon_widgets = ["HULL_WIDTH", "HULL_HEIGHT", "BOTTOM_FLATNESS"]
 
         for k in gertler_widgets:
@@ -828,10 +829,14 @@ class AirshipGUI(QMainWindow):
         for k in dragon_widgets:
             if k in self.inputs: self.inputs[k].setVisible(is_dragon)
 
+        # Explicitly keep l2d visible for both GERTLER and NACA, but hide for DRAGON_DREAM
+        if "l2d" in self.inputs:
+            self.inputs["l2d"].setVisible(not is_dragon)
+
         self.preset_combo.setVisible(not is_naca and not is_dragon)
         self.preset_label.setVisible(not is_naca and not is_dragon)
 
-        # --- NEW: Disable the 2D Petal Plot button for Dragon Dream ---
+        # Disable the 2D Petal Plot button for Dragon Dream
         if hasattr(self, 'btn_plot'):
             self.btn_plot.setEnabled(not is_dragon)
 
